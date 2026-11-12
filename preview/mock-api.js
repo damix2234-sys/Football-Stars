@@ -252,6 +252,9 @@
     matches: S.matches.length,
     online: S.players.filter((p) => now() - p.last_seen < 5 * 60 * 1000).length,
   }));
+  get('/public/recent', () => ({
+    matches: S.matches.slice(-12).reverse().map(({ home_name, away_name, home_score, away_score }) => ({ home_name, away_name, home_score, away_score })),
+  }));
   get('/public/top', () => ({
     players: [...S.players].sort((a, b) => b.level - a.level || b.xp - a.xp).slice(0, 5).map((p) => publicPlayer(p)),
     clubs: [...S.clubs].sort((a, b) => b.points - a.points || b.wins - a.wins).slice(0, 5).map(clubRow),

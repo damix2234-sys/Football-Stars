@@ -154,8 +154,9 @@ async function viewAuth(startMode = 'register') {
   let mode = startMode;
   let stats = null;
   let top = null;
+  let recent = [];
   try {
-    [stats, top] = await Promise.all([api('/public/stats'), api('/public/top')]);
+    [stats, top, { matches: recent }] = await Promise.all([api('/public/stats'), api('/public/top'), api('/public/recent')]);
   } catch {}
   const n = (v) => (v == null ? '–' : fmt(v));
 
@@ -165,7 +166,8 @@ async function viewAuth(startMode = 'register') {
       <a class="logo" href="#">⚽ Football <b>Stars</b></a>
     </header>
 
-    <section class="l-hero" style="--hero:url('${IMG('hero')}')">
+    <section class="l-hero">
+      <canvas class="l-fx" aria-hidden="true"></canvas>
       <div class="l-hero-inner">
         <div class="l-pitch">
           <p class="l-kicker">Darmowa gra piłkarska w przeglądarce</p>
@@ -189,11 +191,19 @@ async function viewAuth(startMode = 'register') {
     </section>
 
     <section class="l-stats">
-      <div><b>${n(stats?.players)}</b><span>piłkarzy</span></div>
-      <div><b>${n(stats?.clubs)}</b><span>klubów</span></div>
-      <div><b>${n(stats?.matches)}</b><span>rozegranych meczów</span></div>
-      <div><b>${n(stats?.online)}</b><span>graczy online</span></div>
+      <div><b data-count="${stats?.players ?? ''}">${n(stats?.players)}</b><span>piłkarzy</span></div>
+      <div><b data-count="${stats?.clubs ?? ''}">${n(stats?.clubs)}</b><span>klubów</span></div>
+      <div><b data-count="${stats?.matches ?? ''}">${n(stats?.matches)}</b><span>rozegranych meczów</span></div>
+      <div><b data-count="${stats?.online ?? ''}">${n(stats?.online)}</b><span>graczy online</span></div>
     </section>
+
+    ${
+      recent?.length
+        ? `<div class="l-ticker" aria-label="Ostatnie wyniki"><span class="l-live">Na żywo</span><div class="l-track"><div class="l-run">${[...recent, ...recent]
+            .map((m) => `<span>${esc(m.home_name)} <b>${m.home_score}:${m.away_score}</b> ${esc(m.away_name)}</span>`)
+            .join('')}</div></div></div>`
+        : ''
+    }
 
     <ul class="l-ticks">
       <li>Gra wieloosobowa – prawdziwi rywale i drużyny</li>
@@ -269,6 +279,8 @@ async function viewAuth(startMode = 'register') {
     <footer class="l-foot">Football Stars · gra przeglądarkowa · wszystkie postacie są fikcyjne</footer>
   </div>`;
 
+  landingFx();
+
   const setMode = (m) => {
     mode = m;
     view.querySelectorAll('[data-m]').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
@@ -298,6 +310,56 @@ async function viewAuth(startMode = 'register') {
       toast(e.message, true);
     }
   };
+}
+
+// Efekty strony startowej: iskry w banerze i odliczanie liczników.
+function landingFx() {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  view.querySelectorAll('[data-count]').forEach((el) => {
+    const target = Number(el.dataset.count);
+    if (!target || reduce) return;
+    const t0 = performance.now();
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / 1400);
+      el.textContent = fmt(Math.round(target * (1 - Math.pow(1 - k, 3))));
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  const cv = view.querySelector('.l-fx');
+  if (!cv || reduce) return;
+  const ctx = cv.getContext('2d');
+  let w = 0, h = 0, dpr = 1;
+  const size = () => {
+    dpr = Math.min(2, devicePixelRatio || 1);
+    w = cv.clientWidth; h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  size();
+  addEventListener('resize', size);
+  const spawn = (y) => ({
+    // iskry gęstsze po prawej, przy postaciach
+    x: w * (0.35 + 0.65 * Math.sqrt(Math.random())), y: y ?? h + 10,
+    r: 0.6 + Math.random() * 2.2, vy: 0.3 + Math.random() * 0.9, vx: (Math.random() - 0.5) * 0.3,
+    a: 0.35 + Math.random() * 0.6, ph: Math.random() * 6.28,
+  });
+  const parts = Array.from({ length: w < 700 ? 45 : 90 }, () => spawn(Math.random() * h));
+  const loop = () => {
+    if (!document.body.contains(cv)) return removeEventListener('resize', size);
+    ctx.clearRect(0, 0, w, h);
+    for (const p of parts) {
+      p.y -= p.vy; p.ph += 0.03; p.x += p.vx + Math.sin(p.ph) * 0.25;
+      if (p.y < -10) Object.assign(p, spawn());
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 4);
+      g.addColorStop(0, `rgba(200,255,120,${p.a})`);
+      g.addColorStop(1, 'rgba(80,230,90,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 4, 0, 6.283); ctx.fill();
+    }
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
 }
 
 function viewCreate() {

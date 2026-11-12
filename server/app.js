@@ -237,6 +237,15 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   );
 
   app.get(
+    '/api/public/recent',
+    route(async () => ({
+      matches: await db.all(
+        'SELECT home_name, away_name, home_score, away_score FROM matches ORDER BY id DESC LIMIT 12',
+      ),
+    })),
+  );
+
+  app.get(
     '/api/public/top',
     route(async () => ({
       players: await publicPlayers(await db.all('SELECT * FROM players ORDER BY level DESC, xp DESC LIMIT 5')),
