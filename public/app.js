@@ -163,7 +163,6 @@ async function viewAuth(startMode = 'register') {
   <div class="landing">
     <header class="l-top">
       <a class="logo" href="#">⚽ Football <b>Stars</b></a>
-      <button class="ghost small" data-goto="login">Zaloguj się</button>
     </header>
 
     <section class="l-hero" style="--hero:url('${IMG('hero')}')">
@@ -171,7 +170,7 @@ async function viewAuth(startMode = 'register') {
         <div class="l-pitch">
           <p class="l-kicker">Darmowa gra piłkarska w przeglądarce</p>
           <h1 class="l-title">Zostań <span>gwiazdą</span> boiska</h1>
-          <p class="l-lead">Stwórz własnego piłkarza, trenuj jego statystyki, wygrywaj sparingi z innymi graczami
+          <p class="l-lead">Stwórz własnego piłkarza, trenuj jego statystyki, wygrywaj mecze z innymi graczami
             i razem ze znajomymi zbuduj klub, o którym usłyszy cała liga.</p>
           <div class="l-auth" id="auth">
           <div class="tabs l-tabs">
