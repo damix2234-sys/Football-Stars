@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node --no-warnings server/index.js",
     "dev": "node --no-warnings --watch server/index.js",
-    "test": "node --no-warnings --test test/*.test.js"
+    "test": "node --no-warnings --test test/*.test.js",
+    "build:preview": "node scripts/build-preview.mjs"
   },
   "repository": {
     "type": "git",

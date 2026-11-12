@@ -11,7 +11,9 @@ let ME = null;
 let serverOffset = 0;
 let timers = [];
 
+// W wersji podglądowej (bez serwera) window.FS_API podstawia lokalny silnik gry.
 async function api(path, body) {
+  if (window.FS_API) return window.FS_API(path, body);
   const res = await fetch('/api' + path, {
     method: body === undefined ? 'GET' : 'POST',
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
@@ -22,12 +24,26 @@ async function api(path, body) {
   return data;
 }
 
+// Potwierdzenie drugim kliknięciem (bez okienka confirm()).
+function confirmClick(fn) {
+  return (ev) => {
+    const b = ev.currentTarget;
+    if (b.dataset.armed) return fn();
+    b.dataset.armed = "1";
+    const old = b.textContent;
+    b.textContent = "Na pewno? Kliknij ponownie";
+    setTimeout(() => { delete b.dataset.armed; b.textContent = old; }, 3000);
+  };
+}
+
 function toast(msg, err = false) {
   const d = document.createElement('div');
   d.textContent = msg;
   if (err) d.className = 'err';
   $('#toast').append(d);
-  setTimeout(() => d.remove(), 3500);
+  const all = $('#toast').children;
+  while (all.length > 2) all[0].remove();
+  setTimeout(() => d.remove(), 2500);
 }
 
 // Wywołanie akcji z obsługą błędów i odświeżeniem stanu.
@@ -84,7 +100,7 @@ function renderHud() {
   $('#logout').onclick = async () => {
     await api('/logout', {});
     ME = null;
-    location.hash = '#/';
+    location.hash = '#';
     boot();
   };
   const badge = $('#badge');
@@ -113,7 +129,7 @@ async function render() {
   timers = [];
   if (!ME?.user) return viewAuth();
   if (!ME.player) return viewCreate();
-  const [name, arg] = location.hash.replace(/^#\/?/, '').split('/');
+  const [name, arg] = location.hash.replace(/^#/, '').split('-');
   document.querySelectorAll('.nav a').forEach((a) => {
     const r = a.dataset.r;
     a.classList.toggle('active', r === name || (r === 'klub' && name === 'kluby'));
@@ -180,7 +196,7 @@ function viewCreate() {
     try {
       await api('/player', Object.fromEntries(new FormData(ev.target)));
       await refreshMe();
-      location.hash = '#/';
+      location.hash = '#';
       render();
     } catch (e) {
       toast(e.message, true);
@@ -213,7 +229,7 @@ async function viewHome() {
         <div class="bar xp"><div style="width:${(p.xp / p.xpNext) * 100}%"></div></div>
         <p class="muted" style="margin:12px 0 4px">Energia ${e.energy}/${CFG.energyMax}</p>
         <div class="bar energy"><div style="width:${(e.energy / CFG.energyMax) * 100}%"></div></div>
-        <p style="margin-top:12px">Klub: ${p.club ? `<a href="#/klub">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : '<a href="#/kluby">brak – znajdź klub</a>'}</p>
+        <p style="margin-top:12px">Klub: ${p.club ? `<a href="#klub">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : '<a href="#kluby">brak – znajdź klub</a>'}</p>
         <p>Bilans: <b>${p.wins}</b>W · <b>${p.draws}</b>R · <b>${p.losses}</b>P · ⚽ ${p.goals}</p>
       </div>
       <div class="card">
@@ -226,12 +242,31 @@ async function viewHome() {
         <button id="daily" ${dailyReady ? '' : 'disabled'}>${dailyReady ? 'Odbierz premię' : `Dostępna za <span id="dcd">${mmss(p.dailyReadyAt - now())}</span>`}</button>
         <h3 style="margin-top:20px">Co dalej?</h3>
         <div class="row">
-          <a class="btn" href="#/trening">Trenuj</a>
-          <a class="btn" href="#/sparingi">Zagraj sparing</a>
+          <a class="btn" href="#trening">Trenuj</a>
+          <a class="btn" href="#sparingi">Zagraj sparing</a>
         </div>
       </div>
+      ${window.FS_API ? `<div class="card">
+        <h3>Tryb testowy</h3>
+        <p class="muted">To wersja podglądowa: gra działa na tym urządzeniu, a pozostali gracze to boty.</p>
+        <div class="row">
+          <button class="small ghost" id="pvEnergy">⚡ Pełna energia</button>
+          <button class="small ghost" id="pvMoney">💰 +1000 monet</button>
+          <button class="small danger" id="pvReset">Zacznij od nowa</button>
+        </div>
+      </div>` : ""}
     </div>`;
   $('#daily').onclick = () => act('/daily-bonus');
+  if (window.FS_API) {
+    $('#pvEnergy').onclick = () => act('/preview/refill');
+    $('#pvMoney').onclick = () => act('/preview/money');
+    $('#pvReset').onclick = confirmClick(async () => {
+      await api('/preview/reset', {});
+      ME = null;
+      location.hash = '#';
+      boot();
+    });
+  }
   if (!dailyReady)
     timers.push(
       setInterval(() => {
@@ -272,7 +307,7 @@ function matchRow(m, perspectiveId) {
   const color = res === 'W' ? 'var(--accent)' : res === 'P' ? 'var(--danger)' : 'var(--muted)';
   return `<tr><td><b style="color:${color}">${res}</b></td>
     <td>${esc(m.home_name)} – ${esc(m.away_name)}</td><td><b>${m.home_score}:${m.away_score}</b></td>
-    <td class="muted">${time(m.created_at)}</td><td><a href="#/mecz/${m.id}">Relacja</a></td></tr>`;
+    <td class="muted">${time(m.created_at)}</td><td><a href="#mecz-${m.id}">Relacja</a></td></tr>`;
 }
 
 async function viewDuels() {
@@ -288,7 +323,7 @@ async function viewDuels() {
           <tr><th>Piłkarz</th><th>Poz.</th><th>Ocena</th><th></th></tr>
           ${opponents
             .map(
-              (o) => `<tr><td><span class="dot ${o.online ? 'on' : ''}"></span><a href="#/gracz/${o.id}">${esc(o.name)}</a>
+              (o) => `<tr><td><span class="dot ${o.online ? 'on' : ''}"></span><a href="#gracz-${o.id}">${esc(o.name)}</a>
                 <span class="tag">${o.position}</span></td><td>${o.level}</td><td>${o.overall}</td>
                 <td><button class="small" data-o="${o.id}">Wyzwij</button></td></tr>`,
             )
@@ -305,7 +340,7 @@ async function viewDuels() {
       (b.onclick = async () => {
         b.disabled = true;
         const r = await act('/duel', { opponentId: Number(b.dataset.o) }, { reload: false });
-        if (r) location.hash = `#/mecz/${r.matchId}`;
+        if (r) location.hash = `#mecz-${r.matchId}`;
         else b.disabled = false;
       }),
   );
@@ -355,7 +390,7 @@ async function viewPlayer(id) {
       <div class="card">
         <h3>Profil</h3>
         <p>Poziom <b>${p.level}</b> · Ocena <b>${p.overall}</b></p>
-        <p>Klub: ${p.club ? `<a href="#/klub/${p.club.id}">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : 'brak'}</p>
+        <p>Klub: ${p.club ? `<a href="#klub-${p.club.id}">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : 'brak'}</p>
         <p>Bilans: <b>${p.wins}</b>W · <b>${p.draws}</b>R · <b>${p.losses}</b>P · ⚽ ${p.goals}</p>
         ${p.id !== ME.player.id ? `<button id="duel">Wyzwij na sparing</button>` : ''}
       </div>
@@ -366,7 +401,7 @@ async function viewPlayer(id) {
   if (b)
     b.onclick = async () => {
       const r = await act('/duel', { opponentId: p.id }, { reload: false });
-      if (r) location.hash = `#/mecz/${r.matchId}`;
+      if (r) location.hash = `#mecz-${r.matchId}`;
     };
 }
 
@@ -411,7 +446,7 @@ async function viewClubs() {
         <h3>Lista klubów</h3>
         <div class="table-wrap"><table>
           <tr><th>Klub</th><th>Członkowie</th><th>Pkt</th></tr>
-          ${clubs.map((c) => `<tr><td><a href="#/klub/${c.id}">[${esc(c.tag)}] ${esc(c.name)}</a></td><td>${c.members}/${CFG.clubMaxMembers}</td><td>${c.points}</td></tr>`).join('') || '<tr><td class="muted" colspan="3">Nie ma jeszcze klubów. Załóż pierwszy!</td></tr>'}
+          ${clubs.map((c) => `<tr><td><a href="#klub-${c.id}">[${esc(c.tag)}] ${esc(c.name)}</a></td><td>${c.members}/${CFG.clubMaxMembers}</td><td>${c.points}</td></tr>`).join('') || '<tr><td class="muted" colspan="3">Nie ma jeszcze klubów. Załóż pierwszy!</td></tr>'}
         </table></div>
       </div>
       ${
@@ -433,7 +468,7 @@ async function viewClubs() {
     f.onsubmit = async (ev) => {
       ev.preventDefault();
       const r = await act('/clubs', Object.fromEntries(new FormData(ev.target)), { reload: false });
-      if (r) location.hash = '#/klub';
+      if (r) location.hash = '#klub';
     };
 }
 
@@ -445,7 +480,7 @@ async function viewClub(id) {
   const c = d.club;
   const canMatch = now() >= c.nextMatchAt;
   view.innerHTML = `
-    <div class="spread"><h1>[${esc(c.tag)}] ${esc(c.name)}</h1><a href="#/kluby">Wszystkie kluby →</a></div>
+    <div class="spread"><h1>[${esc(c.tag)}] ${esc(c.name)}</h1><a href="#kluby">Wszystkie kluby →</a></div>
     <div class="grid">
       <div class="card">
         <h3>Informacje</h3>
@@ -471,7 +506,7 @@ async function viewClub(id) {
           <tr><th>Piłkarz</th><th>Poz.</th><th>Ocena</th>${d.isOwner ? '<th></th>' : ''}</tr>
           ${d.members
             .map(
-              (m) => `<tr><td><span class="dot ${m.online ? 'on' : ''}"></span><a href="#/gracz/${m.id}">${esc(m.name)}</a>
+              (m) => `<tr><td><span class="dot ${m.online ? 'on' : ''}"></span><a href="#gracz-${m.id}">${esc(m.name)}</a>
                 ${m.id === c.ownerId ? '<span class="tag on">Prezes</span>' : ''} <span class="tag">${m.position}</span></td>
                 <td>${m.level}</td><td>${m.overall}</td>
                 ${d.isOwner ? `<td>${m.id !== p.id ? `<button class="small ghost" data-kick="${m.id}">Usuń</button>` : ''}</td>` : ''}</tr>`,
@@ -505,10 +540,10 @@ async function viewClub(id) {
     if (el) el.onclick = fn;
   };
   on('#apply', () => act(`/clubs/${c.id}/apply`));
-  on('#leave', () => confirm('Na pewno opuścić klub?') && act('/clubs/leave'));
+  on('#leave', confirmClick(() => act('/clubs/leave')));
   on('#donate', () => act('/clubs/donate', { amount: Number($('#don').value) }));
   on('#saveDesc', () => act('/clubs/description', { description: $('#desc').value }));
-  view.querySelectorAll('[data-kick]').forEach((b) => (b.onclick = () => confirm('Usunąć zawodnika z klubu?') && act(`/clubs/kick/${b.dataset.kick}`)));
+  view.querySelectorAll('[data-kick]').forEach((b) => (b.onclick = confirmClick(() => act(`/clubs/kick/${b.dataset.kick}`))));
   view.querySelectorAll('[data-acc]').forEach((b) => (b.onclick = () => act(`/clubs/applications/${b.dataset.acc}`, { accept: true })));
   view.querySelectorAll('[data-rej]').forEach((b) => (b.onclick = () => act(`/clubs/applications/${b.dataset.rej}`, { accept: false })));
 
@@ -521,7 +556,7 @@ async function viewClub(id) {
     box.innerHTML =
       rivals
         .map(
-          (r) => `<div class="item"><a href="#/klub/${r.id}">[${esc(r.tag)}] ${esc(r.name)}</a>
+          (r) => `<div class="item"><a href="#klub-${r.id}">[${esc(r.tag)}] ${esc(r.name)}</a>
             <button class="small" data-ch="${r.id}" ${canMatch ? '' : 'disabled'}>Wyzwij</button></div>`,
         )
         .join('') || '<span class="muted">Brak innych klubów.</span>';
@@ -529,7 +564,7 @@ async function viewClub(id) {
       (b) =>
         (b.onclick = async () => {
           const r = await act(`/clubs/challenge/${b.dataset.ch}`, {}, { reload: false });
-          if (r) location.hash = `#/mecz/${r.matchId}`;
+          if (r) location.hash = `#mecz-${r.matchId}`;
         }),
     );
     if (!canMatch)
@@ -548,22 +583,22 @@ async function viewRanking(tab = 'gracze') {
   const data = players ? await api('/ranking/players') : await api('/ranking/clubs');
   view.innerHTML = `
     <h1>Ranking</h1>
-    <div class="tabs"><button class="${players ? 'on' : ''}" onclick="location.hash='#/ranking/gracze'">Piłkarze</button>
-      <button class="${players ? '' : 'on'}" onclick="location.hash='#/ranking/kluby'">Kluby</button></div>
+    <div class="tabs"><button class="${players ? 'on' : ''}" onclick="location.hash='#ranking-gracze'">Piłkarze</button>
+      <button class="${players ? '' : 'on'}" onclick="location.hash='#ranking-kluby'">Kluby</button></div>
     <div class="card table-wrap"><table>
       ${
         players
           ? `<tr><th>#</th><th>Piłkarz</th><th>Klub</th><th>Poz.</th><th>Ocena</th><th>W/R/P</th></tr>
              ${data.players
                .map(
-                 (p, i) => `<tr><td>${i + 1}</td><td><a href="#/gracz/${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
+                 (p, i) => `<tr><td>${i + 1}</td><td><a href="#gracz-${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
                  <td>${p.club ? `[${esc(p.club.tag)}]` : '–'}</td><td>${p.level}</td><td>${p.overall}</td><td>${p.wins}/${p.draws}/${p.losses}</td></tr>`,
                )
                .join('')}`
           : `<tr><th>#</th><th>Klub</th><th>Członkowie</th><th>Pkt</th><th>W/R/P</th></tr>
              ${data.clubs
                .map(
-                 (c, i) => `<tr><td>${i + 1}</td><td><a href="#/klub/${c.id}">[${esc(c.tag)}] ${esc(c.name)}</a></td>
+                 (c, i) => `<tr><td>${i + 1}</td><td><a href="#klub-${c.id}">[${esc(c.tag)}] ${esc(c.name)}</a></td>
                  <td>${c.members}</td><td><b>${c.points}</b></td><td>${c.wins}/${c.draws}/${c.losses}</td></tr>`,
                )
                .join('') || '<tr><td colspan="5" class="muted">Brak klubów.</td></tr>'}`
@@ -576,8 +611,8 @@ async function viewChat(channel = 'global') {
   if (channel === 'club' && !p.club) channel = 'global';
   view.innerHTML = `
     <h1>Czat</h1>
-    <div class="tabs"><button class="${channel === 'global' ? 'on' : ''}" onclick="location.hash='#/czat/global'">Ogólny</button>
-      ${p.club ? `<button class="${channel === 'club' ? 'on' : ''}" onclick="location.hash='#/czat/club'">Klubowy</button>` : ''}</div>
+    <div class="tabs"><button class="${channel === 'global' ? 'on' : ''}" onclick="location.hash='#czat-global'">Ogólny</button>
+      ${p.club ? `<button class="${channel === 'club' ? 'on' : ''}" onclick="location.hash='#czat-club'">Klubowy</button>` : ''}</div>
     <div class="card">
       <div class="chat" id="chat"></div>
       <form id="f" class="row" style="margin-top:12px;flex-wrap:nowrap"><input name="body" maxlength="300" placeholder="Napisz wiadomość…" autocomplete="off"><button>Wyślij</button></form>
@@ -593,7 +628,7 @@ async function viewChat(channel = 'global') {
       box.insertAdjacentHTML(
         'beforeend',
         messages
-          .map((m) => `<div class="msg"><a href="#/gracz/${m.player_id}"><b>${esc(m.name)}</b></a><time>${time(m.created_at)}</time><br>${esc(m.body)}</div>`)
+          .map((m) => `<div class="msg"><a href="#gracz-${m.player_id}"><b>${esc(m.name)}</b></a><time>${time(m.created_at)}</time><br>${esc(m.body)}</div>`)
           .join(''),
       );
       last = messages[messages.length - 1].id;
