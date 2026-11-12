@@ -47,11 +47,20 @@
     const up = [right[1] * fw[2] - right[2] * fw[1], right[2] * fw[0] - right[0] * fw[2], right[0] * fw[1] - right[1] * fw[0]];
     return {
       f,
+      forward: fw,
       // punkt świata [x, y, z] -> ekran; s = piksele na metr na tej głębokości
       p(x, y, z) {
         const d = sub([x, y, z], pos);
         const zc = Math.max(0.05, dot(d, fw));
         return { x: cx + (f * dot(d, right)) / zc, y: cy - (f * dot(d, up)) / zc, s: f / zc, z: zc };
+      },
+      // ekran -> punkt świata na płaszczyźnie z = zp
+      toPlane(sx, sy, zp) {
+        const a = (sx - cx) / f;
+        const b = -(sy - cy) / f;
+        const d = [fw[0] + right[0] * a + up[0] * b, fw[1] + right[1] * a + up[1] * b, fw[2] + right[2] * a + up[2] * b];
+        const t = (zp - pos[2]) / d[2];
+        return [pos[0] + d[0] * t, pos[1] + d[1] * t, zp];
       },
       // ekran -> punkt na płaszczyźnie bramki (z = 0)
       toGoal(sx, sy) {
@@ -67,7 +76,8 @@
   const CAM = {
     // wysoko i daleko za strzelcem: widać całe pole karne
     shoot: camera([0, 24, 60], [0, 0, 10], 2642, 400, 340),
-    save: camera([0, 1.6, -9], [0, 0.8, 11], 915, 400, 290),
+    // oczy bramkarza stojącego na linii bramkowej (1,65 m nad murawą)
+    save: camera([0, 1.65, 0.15], [0, 0.75, 11], 860, 400, 312),
   };
 
   // ---------- stroje ----------
@@ -144,7 +154,7 @@
       for (let i = 0; i < 5; i++) for (let j = 0; j < 3; j++) g.fillRect(fx - 29 + i * 12, 11 + j * 10, 10, 8);
     }
     // murawa: pasy koszenia równoległe do linii bramkowej (co 5,5 m) i lekka szachownica
-    const zMin = view === 'shoot' ? -4 : -0.5;
+    const zMin = view === 'shoot' ? -4 : 1.2;
     // murawa pod spodem (dla obszaru blisko kamery)
     const near = P(0, 0, zMin);
     g.fillStyle = view === 'shoot' ? '#4eab27' : '#1f7832';
@@ -340,6 +350,20 @@
     const ha = lean + (pose.head || 0);
     const neck = [sc[0] + Math.sin(ha) * hr * 0.55, sc[1] - Math.cos(ha) * hr * 0.55];
     const hc = [sc[0] + Math.sin(ha) * hr * 1.45, sc[1] - Math.cos(ha) * hr * 1.45];
+    drawBody(g, { sc, shL, shR, hipL, hipR, kneeL, footL, kneeR, footR, elbL, handL, elbR, handR, neck, hc }, st, { h, lean, ha, back: pose.back, smile: pose.smile });
+    g.restore();
+  }
+
+  // Rysuje ciało z gotowych punktów stawów (współrzędne względem miednicy w bieżącej transformacji).
+  function drawBody(g, J, st, o) {
+    const { sc, shL, shR, hipL, hipR, kneeL, footL, kneeR, footR, elbL, handL, elbR, handR, neck, hc } = J;
+    const h = o.h;
+    const w = h * 0.044;
+    const ow = Math.max(1, h * 0.012);
+    const lean = o.lean || 0;
+    const ha = o.ha || 0;
+    const hr = PR.head * h;
+    const pose = { back: o.back, smile: o.smile };
 
     // Kończyna jako gładki kształt: pogrubienie przy mięśniu (udo, łydka, biceps).
     const taper = (a, b, w1, wm, w2, bulge = 0.4) => {
@@ -664,7 +688,6 @@
       g.fillText(st.num, 0, 0);
       g.restore();
     }
-    g.restore();
   }
 
   function groundShadow(g, x, y, rx, a = 0.32) {
@@ -750,70 +773,165 @@
   }
 
   // ---------- pozy strzelca ----------
-  // Tyłem (mój strzelec): łukowy rozbieg, noga zakroczna, strzał, dobieg, reakcja. Kontakt w t = 0.55.
-  function shooterBack(t, cam, react) {
-    const run = seg(t, 0, 0.5);
-    const e = ease(run);
-    // tor rozbiegu po łuku: z lewej, z tyłu, do piłki
-    const wx = lerp(-2.6, -0.5, e);
-    const wz = lerp(14.0, SPOT + 0.38, e);
-    const p = cam.p(wx, 0, wz);
-    const h = p.s * 1.85;
-    const ph = run * PI * 6.5;
-    const slow = seg(t, 0.38, 0.5);
-    const stride = Math.sin(ph) * (1 - slow);
-    const back = seg(t, 0.42, 0.52);
-    const swing = seg(t, 0.5, 0.62);
-    const follow = seg(t, 0.62, 0.8);
+  // ---------- strzelec w 3D: szkielet z kątami stawów, rzutowany przez kamerę ----------
+  // Wymiary ciała w metrach (wzrost ok. 1,80 m).
+  const B = { pelvis: 0.95, thigh: 0.45, shin: 0.44, torso: 0.52, shoulder: 0.2, hip: 0.11, uArm: 0.3, fArm: 0.28, neck: 0.1, head: 0.12 };
+  const CONTACT = 0.6; // moment kontaktu z piłką w czasie animacji strzelca (0..1)
+  const START = [-2.3, 14.3]; // start rozbiegu (x, z) – z lewej, za piłką
+  const PELVIS_KICK = [-0.24, 11.32]; // miednica w chwili strzału (noga postawna obok piłki)
+
+  // Poza strzelca w czasie t (0..1). Zwraca pozycję miednicy, kierunek i kąty stawów.
+  function shooterPose(t) {
+    const runEnd = CONTACT - 0.1;
+    const run = seg(t, 0, runEnd);
+    // rozbieg: przyspieszenie, równe tempo, wyhamowanie przed ostatnim krokiem
+    const dist = run < 0.15 ? (run * run) / 0.3 : run > 0.85 ? 1 - ((1 - run) * (1 - run)) / 0.3 : 0.075 + (run - 0.15) * (0.85 / 0.7);
+    const e = clamp(dist, 0, 1);
+    let px = lerp(START[0], PELVIS_KICK[0], e);
+    let pz = lerp(START[1], PELVIS_KICK[1], e);
+    // kierunek biegu: po skosie do piłki, przy strzale obrót w stronę bramki
+    const dx = PELVIS_KICK[0] - START[0];
+    const dz = PELVIS_KICK[1] - START[1];
+    const runYaw = Math.atan2(dx, -dz);
+    const yaw = lerp(runYaw, 0.12, smooth(seg(t, runEnd - 0.12, CONTACT)));
+    // cykl kroków (3 pełne cykle w rozbiegu)
+    const p = run * PI * 2 * 3;
+    const fade = 1 - smooth(seg(t, runEnd - 0.06, runEnd));
+    const legPhase = (ph) => ({ hip: 0.5 * Math.sin(ph), knee: 0.25 + 1.15 * Math.pow(Math.max(0, Math.cos(ph)), 1.6) });
+    const R = legPhase(p);
+    const L = legPhase(p + PI);
     const pose = {
-      x: p.x, y: p.y - h * 0.47 - Math.abs(Math.sin(ph)) * h * 0.025 * (1 - back), h, rot: 0, back: true, lean: -0.05 * back + 0.14 * swing - 0.06 * follow,
-      lL1: -0.1 + stride * 0.22 - back * 0.08, lL2: 0.12 + Math.max(0, stride) * 0.55,
-      lR1: 0.1 - stride * 0.22 + swing * 0.5 - follow * 0.15, lR2: -0.1 + Math.max(0, -stride) * 0.55 + back * 0.95 - swing * 0.9,
-      foreR: clamp(swing * 1.1 - follow * 0.5, 0, 1) * 0.8,
-      aL1: -0.28 + stride * 0.55 - (back + swing) * 0.65, aL2: -0.35, aR1: 0.28 + stride * 0.55 + swing * 0.55, aR2: 0.35,
+      px, pz, yaw,
+      py: B.pelvis - 0.035 - 0.03 * Math.abs(Math.cos(p)) * fade,
+      lean: 0.16 * fade + 0.04,
+      hipR: R.hip * fade, kneeR: R.knee * fade + 0.2 * (1 - fade), abdR: 0.03,
+      hipL: L.hip * fade, kneeL: L.knee * fade + 0.2 * (1 - fade), abdL: 0.03,
+      shR: -0.55 * Math.sin(p) * fade, elbR: 1.45, abR: 0.12,
+      shL: 0.55 * Math.sin(p) * fade, elbL: 1.45, abL: 0.12,
+      head: 0,
     };
-    return applyReaction(pose, react);
+    // strzał: zamach (noga do tyłu, kolano ugięte), uderzenie (wyprost), dokończenie, krok
+    if (t > runEnd - 0.06) {
+      const back = smooth(seg(t, runEnd - 0.06, CONTACT - 0.05));
+      const strike = smooth(seg(t, CONTACT - 0.05, CONTACT));
+      const follow = smooth(seg(t, CONTACT, CONTACT + 0.12));
+      const recover = smooth(seg(t, CONTACT + 0.12, CONTACT + 0.32));
+      pose.hipR = lerp(lerp(lerp(pose.hipR, -0.6, back), 0.35, strike), 1.05, follow);
+      pose.hipR = lerp(pose.hipR, 0.15, recover);
+      pose.kneeR = lerp(lerp(lerp(pose.kneeR, 1.7, back), 0.12, strike), 0.08, follow);
+      pose.kneeR = lerp(pose.kneeR, 0.25, recover);
+      // noga postawna: lekko z przodu, ugięta w kolanie
+      pose.hipL = lerp(pose.hipL, 0.12, back) * (1 - recover) + 0.05 * recover;
+      pose.kneeL = lerp(pose.kneeL, 0.38, back);
+      pose.abdL = lerp(0.03, 0.08, back);
+      // ręce: lewa w bok dla równowagi, prawa za siebie
+      pose.shL = lerp(pose.shL, 0.35, back);
+      pose.abL = lerp(0.12, 1.25, back) * (1 - recover * 0.6);
+      pose.elbL = lerp(1.45, 0.4, back);
+      pose.shR = lerp(pose.shR, -0.45, back) + 0.5 * follow;
+      pose.abR = lerp(0.12, 0.55, back) * (1 - recover * 0.6);
+      pose.elbR = lerp(1.45, 0.7, back);
+      pose.lean = lerp(pose.lean, 0.02, back) - 0.12 * strike + 0.1 * follow;
+      pose.lean = lerp(pose.lean, 0.06, recover);
+      pose.py = lerp(pose.py, B.pelvis - 0.07, back) + 0.03 * follow;
+      // po strzale krok do przodu
+      pose.pz -= 0.35 * recover;
+      pose.px += 0.12 * recover;
+    }
+    return pose;
   }
-  // Przodem (strzelec rywala z perspektywy bramki). Kontakt w t = 0.62.
-  function shooterFront(t, cam, react) {
-    const run = seg(t, 0, 0.56);
-    const e = ease(run);
-    const wx = lerp(1.9, 0.38, e) - Math.sin(e * PI) * 0.3;
-    const wz = lerp(SPOT + 3.2, SPOT + 0.35, e);
-    const p = cam.p(wx, 0, wz);
-    const h = p.s * 1.82;
-    const ph = run * PI * 7;
-    const slow = seg(t, 0.46, 0.56);
-    const stride = Math.sin(ph) * (1 - slow);
-    const back = seg(t, 0.5, 0.6);
-    const swing = seg(t, 0.58, 0.7);
-    const follow = seg(t, 0.7, 0.86);
-    const pose = {
-      x: p.x, y: p.y - h * 0.47 - Math.abs(Math.sin(ph)) * h * 0.03 * (1 - back), h, rot: 0, lean: 0.06 * stride - 0.1 * swing,
-      lL1: -0.12 + stride * 0.16, lL2: 0.12 + Math.max(0, -stride) * 0.6,
-      lR1: 0.12 - stride * 0.16 - back * 0.25 + swing * 0.45 - follow * 0.15, lR2: -0.1 + Math.max(0, stride) * 0.6 + back * 0.9 - swing * 1.05,
-      foreR: clamp(swing * 1.25 - follow * 0.55, 0, 1),
-      aL1: -0.32 - stride * 0.5 - swing * 1.05, aL2: -0.4, aR1: 0.32 - stride * 0.5 + swing * 0.85, aR2: 0.4,
-    };
-    return applyReaction(pose, react);
-  }
-  // Reakcja po strzale: radość (gol) albo ręce na głowie (pudło, obrona).
-  function applyReaction(pose, react) {
+
+  // Reakcja po strzale (radość albo ręce na głowie), k = 0..1
+  function shooterReact(pose, react, t) {
     if (!react) return pose;
     const k = smooth(react.k);
+    const q = { ...pose };
+    const legs = (v) => lerp(v, 0.06, k);
+    q.hipR = legs(q.hipR);
+    q.hipL = legs(q.hipL);
+    q.kneeR = lerp(q.kneeR, 0.15, k);
+    q.kneeL = lerp(q.kneeL, 0.15, k);
+    q.lean = lerp(q.lean, react.joy ? -0.05 : 0.12, k);
     if (react.joy) {
-      const jump = Math.abs(Math.sin(react.k * PI * 2.5)) * pose.h * 0.06 * k;
-      return {
-        ...pose, y: pose.y - jump, smile: true, lean: lerp(pose.lean, 0, k),
-        aL1: lerp(pose.aL1, -2.7, k), aL2: lerp(pose.aL2, -0.2, k), aR1: lerp(pose.aR1, 2.7, k), aR2: lerp(pose.aR2, 0.2, k),
-        lL1: lerp(pose.lL1, -0.12, k), lL2: lerp(pose.lL2, 0.1, k), lR1: lerp(pose.lR1, 0.12, k), lR2: lerp(pose.lR2, -0.1, k), foreR: lerp(pose.foreR || 0, 0, k),
-      };
+      q.shR = lerp(q.shR, 2.9, k);
+      q.shL = lerp(q.shL, 2.9, k);
+      q.abR = lerp(q.abR, 0.45, k);
+      q.abL = lerp(q.abL, 0.45, k);
+      q.elbR = lerp(q.elbR, 0.2, k);
+      q.elbL = lerp(q.elbL, 0.2, k);
+      q.py += Math.abs(Math.sin(t * 9)) * 0.12 * k;
+      q.smile = true;
+    } else {
+      q.shR = lerp(q.shR, 2.5, k);
+      q.shL = lerp(q.shL, 2.5, k);
+      q.abR = lerp(q.abR, 0.75, k);
+      q.abL = lerp(q.abL, 0.75, k);
+      q.elbR = lerp(q.elbR, 2.3, k);
+      q.elbL = lerp(q.elbL, 2.3, k);
+      q.head = 0.25 * k;
     }
-    return {
-      ...pose, lean: lerp(pose.lean, 0.06, k), head: 0.15 * k,
-      aL1: lerp(pose.aL1, -2.55, k), aL2: lerp(pose.aL2, 2.35, k), aR1: lerp(pose.aR1, 2.55, k), aR2: lerp(pose.aR2, -2.35, k),
-      lL1: lerp(pose.lL1, -0.1, k), lL2: lerp(pose.lL2, 0.08, k), lR1: lerp(pose.lR1, 0.1, k), lR2: lerp(pose.lR2, -0.08, k), foreR: lerp(pose.foreR || 0, 0, k),
+    return q;
+  }
+
+  // Stawy w świecie [x, y, z] z kątów (zgięcie w przód = dodatnie, odwiedzenie w bok = dodatnie).
+  function skeleton(q) {
+    const f = [Math.sin(q.yaw), 0, -Math.cos(q.yaw)]; // kierunek patrzenia
+    const r = [-f[2], 0, f[0]]; // prawa strona zawodnika
+    const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+    // kierunek kończyny: w dół, obrócony w przód o kąt a i w bok o kąt b
+    const dirv = (a, b, side) => {
+      const down = Math.cos(a) * Math.cos(b);
+      return [f[0] * Math.sin(a) + r[0] * Math.sin(b) * side, -down, f[2] * Math.sin(a) + r[2] * Math.sin(b) * side];
     };
+    const pel = [q.px, q.py, q.pz];
+    const up = [f[0] * Math.sin(q.lean), Math.cos(q.lean), f[2] * Math.sin(q.lean)];
+    const neckBase = add(pel, up, B.torso);
+    const J = {};
+    J.pel = pel;
+    J.hipL = add(pel, r, -B.hip);
+    J.hipR = add(pel, r, B.hip);
+    J.kneeL = add(J.hipL, dirv(q.hipL, q.abdL, -1), B.thigh);
+    J.kneeR = add(J.hipR, dirv(q.hipR, q.abdR, 1), B.thigh);
+    J.footL = add(J.kneeL, dirv(q.hipL - q.kneeL, q.abdL, -1), B.shin);
+    J.footR = add(J.kneeR, dirv(q.hipR - q.kneeR, q.abdR, 1), B.shin);
+    J.sc = neckBase;
+    J.shL = add(add(neckBase, r, -B.shoulder), up, -0.04);
+    J.shR = add(add(neckBase, r, B.shoulder), up, -0.04);
+    J.elbL = add(J.shL, dirv(q.shL, q.abL, -1), B.uArm);
+    J.elbR = add(J.shR, dirv(q.shR, q.abR, 1), B.uArm);
+    J.handL = add(J.elbL, dirv(q.shL + q.elbL, q.abL * 0.6, -1), B.fArm);
+    J.handR = add(J.elbR, dirv(q.shR + q.elbR, q.abR * 0.6, 1), B.fArm);
+    const headUp = [up[0] + f[0] * Math.sin(q.head || 0), up[1], up[2] + f[2] * Math.sin(q.head || 0)];
+    J.neck = add(neckBase, headUp, B.neck * 0.6);
+    J.hc = add(neckBase, headUp, B.neck + B.head);
+    J.f = f;
+    return J;
+  }
+
+  // Rzutuje szkielet kamerą i rysuje postać (tym samym rysunkiem co pozostali zawodnicy).
+  function drawShooter3D(g, cam, q, st) {
+    const J = skeleton(q);
+    const P = (v) => cam.p(v[0], v[1], v[2]);
+    const pel = P(J.pel);
+    const keys = ['sc', 'shL', 'shR', 'hipL', 'hipR', 'kneeL', 'footL', 'kneeR', 'footR', 'elbL', 'handL', 'elbR', 'handR', 'neck', 'hc'];
+    const S = {};
+    for (const k of keys) {
+      const p = P(J[k]);
+      S[k] = [p.x - pel.x, p.y - pel.y];
+    }
+    // tyłem do kamery, gdy patrzy w tę samą stronę co kamera
+    const camDir = cam.forward;
+    const back = J.f[0] * camDir[0] + J.f[2] * camDir[2] > 0;
+    // zamiana stron, gdy postać jest przodem (prawa ręka po lewej stronie ekranu)
+    const h = pel.s * 1.8;
+    const ha = Math.atan2(S.hc[0] - S.neck[0], -(S.hc[1] - S.neck[1]));
+    const lean = Math.atan2(S.sc[0], -S.sc[1]);
+    const shadow = P([J.pel[0], 0, J.pel[2]]);
+    groundShadow(g, shadow.x, shadow.y, h * 0.22);
+    g.save();
+    g.translate(pel.x, pel.y);
+    drawBody(g, S, st, { h, lean, ha, back, smile: q.smile });
+    g.restore();
   }
 
   // ---------- piłka ----------
@@ -1022,8 +1140,19 @@
     let raf = 0;
     // widok obrony: płaszczyzna bramki to rama obrazu
     // widok obrony: punkt bramki <-> ekran przez kamerę 3D zza linii bramkowej
-    const saveMap = (p) => CAM.save.p(p.x * GW, p.y * GH, 0);
-    const saveUnmap = (sx, sy) => CAM.save.toGoal(sx, sy);
+    // Widok obrony: bramkarz widzi piłkę, gdy dolatuje do jego zasięgu (płaszczyzna ZR przed linią).
+    // Punkt bramki <-> punkt na tej płaszczyźnie leżą na torze piłki z punktu karnego.
+    const ZR = 5;
+    const KR = (SPOT - ZR) / SPOT;
+    const reachPoint = (p) => [p.x * GW * KR, 0.11 + (p.y * GH - 0.11) * KR, ZR];
+    const saveMap = (p) => {
+      const w = reachPoint(p);
+      return CAM.save.p(w[0], w[1], w[2]);
+    };
+    const saveUnmap = (sx, sy) => {
+      const w = CAM.save.toPlane(sx, sy, ZR);
+      return { x: w[0] / KR / GW, y: ((w[1] - 0.11) / KR + 0.11) / GH };
+    };
 
     function resize() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -1188,10 +1317,9 @@
       };
       // strzelec (bliżej kamery, więc rysowany po piłce, gdy stoi z przodu)
       const react = a && a.t > a.hitT + 0.08 ? { k: seg(a.t, a.hitT + 0.08, a.hitT + 0.35), joy: a.result === 'goal' } : null;
-      const sp = shooterBack(a ? phase(a, 0.55) : 0, cam, react);
+      const q = shooterReact(shooterPose(a ? phase(a, CONTACT) : 0), react, now / 1000);
       ballDraw();
-      groundShadow(g, sp.x, sp.y + sp.h * 0.47, sp.h * 0.22);
-      drawRig(g, sp, STYLE.shooterMe);
+      drawShooter3D(g, cam, q, STYLE.shooterMe);
       // miejsce trafienia (krótki ślad)
       if (a && a.t > a.hitT && a.result !== 'miss') {
         const hp = cam.p(a.kick.ball.x * GW, a.kick.ball.y * GH, a.result === 'save' ? KZ : 0);
@@ -1232,71 +1360,40 @@
       }
     }
 
-    // ---------- widok: obrona (zza linii bramkowej, bramka 7,32 x 2,44 m, same rękawice) ----------
-    function drawSaveFrame(cam) {
-      // boczne siatki i dach (od słupków w stronę kamery)
-      g.strokeStyle = 'rgba(235,245,240,.22)';
-      g.lineWidth = 1;
-      for (const sx of [-GW, GW]) {
-        for (let k = 0; k <= 10; k++) {
-          const y = (k / 10) * GH;
-          const a = cam.p(sx, y, 0);
-          const b = cam.p(sx * 1.02, y * 0.9, -1.6);
-          g.beginPath();
-          g.moveTo(a.x, a.y);
-          g.lineTo(b.x, b.y);
-          g.stroke();
-        }
-        for (let k = 0; k <= 6; k++) {
-          const z = -(k / 6) * 1.6;
-          const a = cam.p(sx * (1 + 0.02 * (k / 6)), 0, z);
-          const b = cam.p(sx * (1 + 0.02 * (k / 6)), GH * (1 - 0.1 * (k / 6)), z);
-          g.beginPath();
-          g.moveTo(a.x, a.y);
-          g.lineTo(b.x, b.y);
-          g.stroke();
-        }
-      }
-      for (let k = 0; k <= 24; k++) {
-        const x = lerp(-GW, GW, k / 24);
-        const a = cam.p(x, GH, 0);
-        const b = cam.p(x * 1.02, GH * 0.9, -1.6);
+    // Słupki widać tylko kątem oka: po obu stronach, rozmyte, wychodzące poza kadr.
+    function drawEdgePosts() {
+      for (const side of [-1, 1]) {
+        const x0 = side < 0 ? 0 : W;
+        const gr = g.createLinearGradient(x0, 0, x0 - side * -60, 0);
+        gr.addColorStop(0, 'rgba(240,245,242,.85)');
+        gr.addColorStop(0.45, 'rgba(240,245,242,.35)');
+        gr.addColorStop(1, 'rgba(240,245,242,0)');
+        g.fillStyle = gr;
         g.beginPath();
-        g.moveTo(a.x, a.y);
-        g.lineTo(b.x, b.y);
-        g.stroke();
+        g.moveTo(x0, 0);
+        g.lineTo(x0 + side * -46, 0);
+        g.lineTo(x0 + side * -30, H);
+        g.lineTo(x0, H);
+        g.closePath();
+        g.fill();
       }
-      // linia bramkowa między słupkami
-      const g0 = cam.p(-GW, 0, 0);
-      const g1 = cam.p(GW, 0, 0);
-      g.strokeStyle = 'rgba(255,255,255,.9)';
-      g.lineWidth = g0.s * 0.12;
-      g.beginPath();
-      g.moveTo(g0.x, g0.y);
-      g.lineTo(g1.x, g1.y);
-      g.stroke();
-      // słupki i poprzeczka (12 cm) z cieniowaniem walca
-      const L0 = cam.p(-GW, 0, 0), L1 = cam.p(-GW, GH, 0), R1 = cam.p(GW, GH, 0), R0 = cam.p(GW, 0, 0);
-      const pw = L1.s * 0.12;
-      const cyl = (x1, y1, x2, y2, vertical) => {
-        const gr = vertical ? g.createLinearGradient(x1 - pw / 2, 0, x1 + pw / 2, 0) : g.createLinearGradient(0, y1 - pw / 2, 0, y1 + pw / 2);
-        gr.addColorStop(0, '#aeb8b3');
-        gr.addColorStop(0.45, '#ffffff');
-        gr.addColorStop(1, '#9aa49f');
-        g.strokeStyle = gr;
-        g.lineWidth = pw;
-        g.lineCap = 'round';
-        g.beginPath();
-        g.moveTo(x1, y1);
-        g.lineTo(x2, y2);
-        g.stroke();
-      };
+      // poprzeczka nad głową: cień u góry kadru
+      const top = g.createLinearGradient(0, 0, 0, 34);
+      top.addColorStop(0, 'rgba(235,240,238,.55)');
+      top.addColorStop(1, 'rgba(235,240,238,0)');
+      g.fillStyle = top;
+      g.fillRect(0, 0, W, 34);
+    }
+    // Obrys bramki na wysokości Twojego zasięgu: tędy przelatują strzały celne.
+    function drawReachZone() {
+      const c = [reachPoint({ x: -1, y: 0 }), reachPoint({ x: -1, y: 1 }), reachPoint({ x: 1, y: 1 }), reachPoint({ x: 1, y: 0 })].map((w) => CAM.save.p(w[0], w[1], w[2]));
       g.save();
-      g.shadowColor = 'rgba(0,0,0,.5)';
-      g.shadowBlur = 10;
-      cyl(L0.x, L0.y, L1.x, L1.y, true);
-      cyl(R0.x, R0.y, R1.x, R1.y, true);
-      cyl(L1.x, L1.y, R1.x, R1.y, false);
+      g.strokeStyle = 'rgba(255,255,255,.7)';
+      g.lineWidth = 2.5;
+      g.setLineDash([12, 9]);
+      g.beginPath();
+      c.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
+      g.stroke();
       g.restore();
     }
 
@@ -1319,27 +1416,41 @@
       g.translate(-400, -300);
       g.drawImage(backdrop.save, -24, -24, W + 48, H + 48);
       const react = a && a.t > a.hitT + 0.08 ? { k: seg(a.t, a.hitT + 0.08, a.hitT + 0.35), joy: a.result === 'goal' } : null;
-      const sp = shooterFront(a ? phase(a, 0.62) : 0, cam, react);
-      if (!a) sp.lean = Math.sin(t) * 0.03;
-      groundShadow(g, sp.x, sp.y + sp.h * 0.47, sp.h * 0.24);
+      const q = shooterReact(shooterPose(a ? phase(a, CONTACT) : 0), react, now / 1000);
+      if (!a) q.lean += Math.sin(t) * 0.02;
+      drawShooter3D(g, cam, q, STYLE.shooterOp);
       const spot = cam.p(0, 0.11, SPOT);
       if (!a || a.t < a.contactT) {
         const sh = cam.p(0, 0, SPOT);
         groundShadow(g, sh.x, sh.y, spot.s * 0.16, 0.45);
         drawBall(g, spot.x, spot.y, spot.s * 0.11, 0);
       }
-      drawRig(g, sp, STYLE.shooterOp);
-      drawSaveFrame(cam);
-      // piłka w locie: ten sam tor 3D co w widoku strzału
+      drawReachZone();
+      // piłka w locie: prosto do Twojego zasięgu, potem obok Ciebie (gol) albo odbita (obrona)
       if (a && a.t >= a.contactT) {
+        const end = reachPoint(a.kick.ball);
+        const start = [0, 0.11, SPOT];
         let wpt;
-        if (a.t <= a.hitT) wpt = ballWorld(a.kick, ease(seg(a.t, a.contactT, a.hitT)), 0, KZ);
-        else wpt = ballWorld(a.kick, 1, seg(a.t, a.hitT, 1), KZ);
+        if (a.t <= a.hitT) {
+          const e = ease(seg(a.t, a.contactT, a.hitT));
+          wpt = [lerp(start[0], end[0], e), lerp(start[1], end[1], e) + Math.sin(e * PI) * 0.15, lerp(start[2], end[2], e)];
+        } else {
+          const v = seg(a.t, a.hitT, 1);
+          const side = Math.sign(end[0]) || 1;
+          if (a.result === 'save') wpt = [end[0] + side * 2.6 * v, end[1] + Math.sin(v * PI) * 0.7, end[2] + 3.2 * v];
+          else {
+            const tgt = [a.kick.ball.x * GW, a.kick.ball.y * GH, 0];
+            wpt = [lerp(end[0], tgt[0], v * 0.9), lerp(end[1], tgt[1], v * 0.9), lerp(end[2], tgt[2], v * 0.9)];
+          }
+        }
         const bp = cam.p(wpt[0], wpt[1], wpt[2]);
-        const bs = cam.p(wpt[0], 0, wpt[2]);
-        groundShadow(g, bs.x, bs.y, Math.max(2, bp.s * 0.16), 0.4);
-        drawBall(g, bp.x, bp.y, bp.s * 0.11, a.t * 18);
+        if (bp.z > 0.6) {
+          const bs = cam.p(wpt[0], 0, wpt[2]);
+          groundShadow(g, bs.x, bs.y, Math.max(2, bp.s * 0.16), 0.4);
+          drawBall(g, bp.x, bp.y, Math.min(90, bp.s * 0.11), a.t * 18);
+        }
       }
+      drawEdgePosts();
       g.restore();
       // znacznik miejsca rzutu
       if (state.marker) {
@@ -1372,7 +1483,7 @@
         g.setLineDash([]);
       }
       // rękawice: gotowość nisko przed sobą, potem rzut (przy obronie dokładnie do piłki)
-      const ready = { l: { x: 340, y: 470 }, r: { x: 460, y: 470 } };
+      const ready = { l: { x: 335, y: 492 }, r: { x: 465, y: 492 } };
       const breath = Math.sin(now / 380) * 3;
       let L = { x: ready.l.x, y: ready.l.y + breath };
       let R = { x: ready.r.x, y: ready.r.y + breath };
