@@ -7,17 +7,28 @@ import { createApp } from '../server/app.js';
 test('energia regeneruje się w czasie i nie przekracza maksimum', () => {
   const t0 = 1_000_000;
   assert.equal(G.currentEnergy(50, t0, t0 + G.ENERGY_REGEN_MS * 3).energy, 53);
-  assert.equal(G.currentEnergy(95, t0, t0 + G.ENERGY_REGEN_MS * 100).energy, G.ENERGY_MAX);
+  assert.equal(G.currentEnergy(G.ENERGY_MAX - 5, t0, t0 + G.ENERGY_REGEN_MS * 100).energy, G.ENERGY_MAX);
   assert.equal(G.currentEnergy(50, t0, t0 + G.ENERGY_REGEN_MS - 1).energy, 50);
 });
 
-test('awans poziomu przenosi nadmiar XP', () => {
-  assert.deepEqual(G.addXp(1, 90, 30), { level: 2, xp: 20, levelsUp: 1 });
-  assert.deepEqual(G.addXp(1, 0, 350), { level: 3, xp: 50, levelsUp: 2 });
+test('trening podnosi poziom specjalizacji, a plan automatu pilnuje budżetu', () => {
+  const need = G.trainingsNeeded(10);
+  assert.deepEqual(G.applyTrainings(10, 0, need), { level: 11, progress: 0, gained: 1 });
+  assert.equal(G.applyTrainings(10, 0, need - 1).level, 10);
+  // brak pieniędzy = zero treningów
+  assert.equal(G.planAuto(10, 0, 500, 0, 1).count, 0);
+  // budżet nigdy nie jest przekroczony, a czas ogranicza liczbę treningów
+  const p = G.planAuto(10, 0, 300, 5000, 1);
+  assert.ok(p.energy <= 300 && p.money <= 5000);
+  assert.ok(G.planAuto(1, 0, 1e9, 1e9, 0.25).count <= (0.25 * 3600) / 5);
+  // OVR = suma specjalizacji, kategoria = suma jej dwóch specjalizacji
+  const s = G.startingSkills('NAP');
+  assert.equal(G.ovr(s), G.SPEC_KEYS.reduce((a, k) => a + s[k], 0));
+  assert.equal(G.categoryOvr(s, 'atak'), s.wykonczenie + s.drybling);
 });
 
 test('symulacja jest deterministyczna i lepszy zawodnik zwykle wygrywa', () => {
-  const weak = G.playerSide('Słaby', G.startingStats('NAP'));
+  const weak = G.playerSide('Słaby', G.startingSkills('NAP'));
   const strongStats = Object.fromEntries(G.STAT_KEYS.map((k) => [k, 30]));
   const strong = G.playerSide('Mocny', strongStats);
   assert.deepEqual(G.simulate(weak, strong, 42), G.simulate(weak, strong, 42));
@@ -30,9 +41,9 @@ test('symulacja jest deterministyczna i lepszy zawodnik zwykle wygrywa', () => {
 });
 
 test('przedmioty dodają bonusy do statystyk', () => {
-  const s = G.effectiveStats(G.startingStats('POM'), ['buty1', 'rek1']);
-  assert.equal(s.szybkosc, G.startingStats('POM').szybkosc + 1);
-  assert.equal(s.bramkarstwo, G.startingStats('POM').bramkarstwo + 1);
+  const s = G.effectiveStats(G.startingSkills('POM'), ['buty1', 'rek1']);
+  assert.equal(s.szybkosc, G.startingSkills('POM').szybkosc + 2);
+  assert.equal(s.chwytanie, G.startingSkills('POM').chwytanie + 2);
 });
 
 // --- test integracyjny API ---
@@ -64,7 +75,7 @@ function client(base) {
   };
 }
 
-test('pełny przebieg: rejestracja, trening, sparing, klub', async () => {
+test('pełny przebieg: rejestracja, trening, mecz, klub', async () => {
   await withServer(async (base, clock) => {
     const a = client(base);
     const b = client(base);
@@ -74,11 +85,34 @@ test('pełny przebieg: rejestracja, trening, sparing, klub', async () => {
       assert.equal((await cl('/player', { name: n + ' Testowy', position: pos })).status, 200);
     }
     const me = (await a('/me')).data.player;
-    assert.equal(me.energy, 100);
+    assert.equal(me.energy, G.ENERGY_MAX);
+    assert.equal(me.ovr, G.ovr(G.startingSkills('NAP')));
 
-    const tr = await a('/train', { stat: 'strzaly' });
+    // trening ręczny + przerwa 5 s
+    const tr = await a('/train', { spec: 'wykonczenie' });
     assert.equal(tr.status, 200, JSON.stringify(tr.data));
-    assert.equal((await a('/me')).data.player.energy, 90);
+    const cost = G.trainCost(me.training.specs.wykonczenie.level);
+    assert.equal((await a('/me')).data.player.energy, G.ENERGY_MAX - cost.energy);
+    assert.equal((await a('/train', { spec: 'wykonczenie' })).status, 400); // za szybko
+    clock.t += G.TRAIN_COOLDOWN_MS;
+    assert.equal((await a('/train', { spec: 'wykonczenie' })).status, 200);
+
+    // trening automatyczny: plan, start, postęp w czasie, anulowanie ze zwrotem
+    const plan = (await a('/auto/plan', { spec: 'drybling', hours: 0.25 })).data;
+    assert.ok(plan.count > 0, JSON.stringify(plan));
+    const before = (await a('/me')).data.player;
+    assert.equal((await a('/auto/start', { spec: 'drybling', hours: 0.25 })).status, 200);
+    const started = (await a('/me')).data.player;
+    assert.equal(started.money, before.money - plan.money);
+    assert.equal((await a('/train', { spec: 'drybling' })).status, 400); // trenuje automatycznie
+    clock.t += Math.floor(plan.count / 2) * G.TRAIN_COOLDOWN_MS;
+    const mid = (await a('/me')).data.player;
+    assert.ok(mid.training.specs.drybling.level >= before.training.specs.drybling.level);
+    assert.equal(mid.training.autos[0].done, Math.floor(plan.count / 2));
+    assert.equal((await a('/auto/cancel', { spec: 'drybling' })).status, 200);
+    const afterCancel = (await a('/me')).data.player;
+    assert.ok(afterCancel.money > mid.money, 'zwrot za niewykonane treningi');
+    assert.equal(afterCancel.training.autos.length, 0);
 
     const bId = (await b('/me')).data.player.id;
     const duel = await a('/duel', { opponentId: bId });

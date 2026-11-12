@@ -48,45 +48,67 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       (SELECT COUNT(*) FROM players p WHERE p.club_id = c.id) AS members FROM clubs c`;
 
   // ---------- pomocnicze ----------
-  // W transakcji blokujemy wiersz gracza, żeby równoległe akcje nie nadpisały się nawzajem.
-  async function loadPlayer(id) {
-    const p = await db.get(`SELECT * FROM players WHERE id = ?${db.inTx() ? ' FOR UPDATE' : ''}`, id);
-    if (!p) return null;
-    const e = G.currentEnergy(p.energy, p.energy_updated, now());
-    if (e.energy !== p.energy || e.updatedAt !== p.energy_updated) {
-      await db.run('UPDATE players SET energy = ?, energy_updated = ? WHERE id = ?', e.energy, e.updatedAt, id);
-      p.energy = e.energy;
-      p.energy_updated = e.updatedAt;
-    }
-    return p;
+  const skillsOf = (p) => JSON.parse(p.skills);
+  const progressOf = (p) => JSON.parse(p.training_progress);
+
+  // Wczytuje gracza: odnawia energię i rozlicza ukończone treningi automatyczne.
+  // Zawsze w transakcji z blokadą wiersza, żeby równoległe zapytania nie zdublowały rozliczenia.
+  function loadPlayer(id) {
+    return db.tx(async () => {
+      const p = await db.get('SELECT * FROM players WHERE id = ? FOR UPDATE', id);
+      if (!p) return null;
+      const e = G.currentEnergy(p.energy, p.energy_updated, now());
+      if (e.energy !== p.energy || e.updatedAt !== p.energy_updated) {
+        await db.run('UPDATE players SET energy = ?, energy_updated = ? WHERE id = ?', e.energy, e.updatedAt, id);
+        p.energy = e.energy;
+        p.energy_updated = e.updatedAt;
+      }
+      const jobs = await db.all('SELECT * FROM auto_trainings WHERE player_id = ?', id);
+      if (jobs.length) {
+        const skills = skillsOf(p);
+        const progress = progressOf(p);
+        let changed = false;
+        for (const j of jobs) {
+          const completed = Math.min(j.count, Math.floor((now() - j.started_at) / G.TRAIN_COOLDOWN_MS));
+          if (completed > j.done) {
+            const r = G.applyTrainings(skills[j.spec], progress[j.spec] || 0, completed - j.done);
+            skills[j.spec] = r.level;
+            progress[j.spec] = r.progress;
+            changed = true;
+          }
+          if (completed >= j.count) {
+            await db.run('DELETE FROM auto_trainings WHERE player_id = ? AND spec = ?', id, j.spec);
+            await notify(id, `Trening automatyczny „${G.SPECS[j.spec].name}” zakończony (${j.count} treningów).`);
+          } else if (completed > j.done) {
+            await db.run('UPDATE auto_trainings SET done = ? WHERE player_id = ? AND spec = ?', completed, id, j.spec);
+          }
+        }
+        if (changed) {
+          p.skills = JSON.stringify(skills);
+          p.training_progress = JSON.stringify(progress);
+          p.ovr = G.ovr(skills);
+          await db.run(
+            'UPDATE players SET skills = ?, training_progress = ?, ovr = ? WHERE id = ?',
+            p.skills,
+            p.training_progress,
+            p.ovr,
+            id,
+          );
+        }
+      }
+      return p;
+    });
   }
-  const baseStats = (p) => Object.fromEntries(G.STAT_KEYS.map((k) => [k, p[k]]));
   const equippedIds = async (pid) =>
     (await db.all('SELECT item_id FROM inventory WHERE player_id = ? AND equipped = 1', pid)).map((r) => r.item_id);
-  const effStats = async (p) => G.effectiveStats(baseStats(p), await equippedIds(p.id));
+  const effStats = async (p) => G.effectiveStats(skillsOf(p), await equippedIds(p.id));
 
   async function spendEnergy(p, amount) {
     if (p.energy < amount) fail(`Za mało energii (potrzeba ${amount}).`);
     const updated = p.energy >= G.ENERGY_MAX ? now() : p.energy_updated;
     await db.run('UPDATE players SET energy = energy - ?, energy_updated = ? WHERE id = ?', amount, updated, p.id);
-  }
-
-  async function grantXp(pid, gained) {
-    const p = await db.get('SELECT level, xp FROM players WHERE id = ?', pid);
-    const r = G.addXp(p.level, p.xp, gained);
-    await db.run('UPDATE players SET level = ?, xp = ? WHERE id = ?', r.level, r.xp, pid);
-    if (r.levelsUp > 0) {
-      const bonus = 100 * r.levelsUp;
-      await db.run(
-        'UPDATE players SET money = money + ?, energy = ?, energy_updated = ? WHERE id = ?',
-        bonus,
-        G.ENERGY_MAX,
-        now(),
-        pid,
-      );
-      await notify(pid, `Awans na poziom ${r.level}! Otrzymujesz ${bonus} monet i pełną energię.`);
-    }
-    return r;
+    p.energy -= amount;
+    p.energy_updated = updated;
   }
 
   const notify = (pid, body) =>
@@ -104,16 +126,16 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     const clubById = Object.fromEntries(clubs.map((c) => [c.id, c]));
     return rows.map((p) => {
       const stats = G.effectiveStats(
-        baseStats(p),
+        skillsOf(p),
         inv.filter((i) => i.player_id === p.id).map((i) => i.item_id),
       );
       return {
         id: p.id,
         name: p.name,
         position: p.position,
-        level: p.level,
+        ovr: p.ovr,
         stats,
-        overall: G.overall(stats),
+        overall: G.ovr(stats),
         wins: p.wins,
         draws: p.draws,
         losses: p.losses,
@@ -215,11 +237,14 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       items: G.ITEMS,
       energyMax: G.ENERGY_MAX,
       energyRegenMs: G.ENERGY_REGEN_MS,
-      trainingEnergy: G.TRAINING_ENERGY,
+      categories: G.CATEGORIES,
+      trainCooldownMs: G.TRAIN_COOLDOWN_MS,
+      autoMaxHours: G.AUTO_MAX_HOURS,
+      autoMaxActive: G.AUTO_MAX_ACTIVE,
       duelEnergy: G.DUEL_ENERGY,
       clubCreateCost: G.CLUB_CREATE_COST,
       clubMaxMembers: G.CLUB_MAX_MEMBERS,
-      duelLevelRange: G.DUEL_LEVEL_RANGE,
+      duelOvrRatio: G.DUEL_OVR_RATIO,
     })),
   );
 
@@ -248,7 +273,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   app.get(
     '/api/public/top',
     route(async () => ({
-      players: await publicPlayers(await db.all('SELECT * FROM players ORDER BY level DESC, xp DESC LIMIT 5')),
+      players: await publicPlayers(await db.all('SELECT * FROM players ORDER BY ovr DESC LIMIT 5')),
       clubs: await db.all(`${clubListSql} ORDER BY c.points DESC, c.wins DESC LIMIT 5`),
     })),
   );
@@ -264,22 +289,47 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       if (!/^[\p{L}][\p{L}\d .'-]{2,23}$/u.test(name)) fail('Nazwa piłkarza: 3–24 znaki, zaczyna się literą.');
       if (!G.POSITIONS[position]) fail('Wybierz pozycję.');
       if (await db.get('SELECT 1 FROM players WHERE lower(name) = lower(?)', name)) fail('Ta nazwa jest zajęta.');
-      const s = G.startingStats(position);
+      const skills = G.startingSkills(position);
       const r = await db.run(
-        `INSERT INTO players (user_id, name, position, energy_updated, created_at, last_seen,
-          strzaly, podania, drybling, obrona, szybkosc, kondycja, bramkarstwo)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO players (user_id, name, position, energy_updated, created_at, last_seen, skills, ovr, money, energy)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         req.userId,
         name,
         position,
         now(),
         now(),
         now(),
-        ...G.STAT_KEYS.map((k) => s[k]),
+        JSON.stringify(skills),
+        G.ovr(skills),
+        G.START_MONEY,
+        G.ENERGY_MAX,
       );
-      await notify(r.rows[0].id, 'Witaj w Football Stars! Zacznij od treningu, a potem zagraj pierwszy sparing.');
+      await notify(r.rows[0].id, 'Witaj w Football Stars! Zacznij od treningu, a potem zagraj pierwszy mecz.');
     }),
   );
+
+  // Stan treningu: poziom, postęp i koszt każdej specjalizacji + aktywne treningi automatyczne.
+  async function trainingState(p) {
+    const skills = skillsOf(p);
+    const progress = progressOf(p);
+    const jobs = await db.all('SELECT * FROM auto_trainings WHERE player_id = ?', p.id);
+    return {
+      specs: Object.fromEntries(
+        G.SPEC_KEYS.map((k) => [
+          k,
+          { level: skills[k], progress: progress[k] || 0, needed: G.trainingsNeeded(skills[k]), cost: G.trainCost(skills[k]) },
+        ]),
+      ),
+      categories: Object.fromEntries(G.CATEGORIES.map((c) => [c.id, G.categoryOvr(skills, c.id)])),
+      readyAt: p.last_train + G.TRAIN_COOLDOWN_MS,
+      autos: jobs.map((j) => ({
+        spec: j.spec,
+        count: j.count,
+        done: Math.min(j.count, Math.floor((now() - j.started_at) / G.TRAIN_COOLDOWN_MS)),
+        endsAt: j.started_at + j.count * G.TRAIN_COOLDOWN_MS,
+      })),
+    };
+  }
 
   app.get(
     '/api/me',
@@ -288,28 +338,19 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const user = await db.get('SELECT id, login FROM users WHERE id = ?', req.userId);
       if (!req.playerId) return { user, player: null };
       const p = await loadPlayer(req.playerId);
-      const base = baseStats(p);
-      const progress = JSON.parse(p.training_progress);
       const club = p.club_id ? await db.get('SELECT owner_id FROM clubs WHERE id = ?', p.club_id) : null;
       const unread = (await db.get('SELECT COUNT(*) AS n FROM notifications WHERE player_id = ? AND read = 0', p.id)).n;
       return {
         user,
         player: {
           ...(await publicPlayer(p)),
-          baseStats: base,
-          training: Object.fromEntries(
-            G.STAT_KEYS.map((k) => [
-              k,
-              { progress: progress[k] || 0, needed: G.trainingsNeeded(base[k]), cost: G.trainingCost(base[k]) },
-            ]),
-          ),
-          xp: p.xp,
-          xpNext: G.xpForNextLevel(p.level),
+          baseStats: skillsOf(p),
+          training: await trainingState(p),
           money: p.money,
           energy: p.energy,
           energyUpdated: p.energy_updated,
           dailyReadyAt: p.last_daily + G.DAILY_BONUS_MS,
-          dailyAmount: G.dailyBonusAmount(p.level),
+          dailyAmount: G.dailyBonusAmount(p.ovr),
           clubRole: club ? (club.owner_id === p.id ? 'owner' : 'member') : null,
           unread,
         },
@@ -336,37 +377,116 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   );
 
   // ---------- trening ----------
+  const specOf = (req) => {
+    const spec = String(req.body.spec || '');
+    if (!G.SPECS[spec]) fail('Nieznana specjalizacja.');
+    return spec;
+  };
+  const autoFor = (pid, spec) => db.get('SELECT * FROM auto_trainings WHERE player_id = ? AND spec = ?', pid, spec);
+
+  // Trening ręczny: jeden trening co 5 sekund.
   app.post(
     '/api/train',
     needPlayer,
     action(async (req) => {
-      const stat = String(req.body.stat || '');
-      if (!G.STATS[stat]) fail('Nieznana statystyka.');
+      const spec = specOf(req);
       const p = await loadPlayer(req.playerId);
-      const cost = G.trainingCost(p[stat]);
-      if (p.money < cost) fail(`Trening kosztuje ${cost} monet.`);
-      await spendEnergy(p, G.TRAINING_ENERGY);
-      const progress = JSON.parse(p.training_progress);
-      const needed = G.trainingsNeeded(p[stat]);
-      progress[stat] = (progress[stat] || 0) + 1;
-      let improved = false;
-      if (progress[stat] >= needed) {
-        progress[stat] = 0;
-        improved = true;
-      }
-      // nazwa kolumny pochodzi z G.STATS (sprawdzona wyżej)
+      if (now() < p.last_train + G.TRAIN_COOLDOWN_MS) fail('Odpocznij chwilę – trening co 5 sekund.');
+      if (await autoFor(p.id, spec)) fail('Ta specjalizacja trenuje teraz automatycznie.');
+      const skills = skillsOf(p);
+      const progress = progressOf(p);
+      const cost = G.trainCost(skills[spec]);
+      if (p.money < cost.money) fail(`Trening kosztuje ${cost.money} monet.`);
+      await spendEnergy(p, cost.energy);
+      const r = G.applyTrainings(skills[spec], progress[spec] || 0, 1);
+      skills[spec] = r.level;
+      progress[spec] = r.progress;
       await db.run(
-        `UPDATE players SET money = money - ?, training_progress = ?, ${stat} = ${stat} + ? WHERE id = ?`,
-        cost,
+        'UPDATE players SET money = money - ?, skills = ?, training_progress = ?, ovr = ?, last_train = ? WHERE id = ?',
+        cost.money,
+        JSON.stringify(skills),
         JSON.stringify(progress),
-        improved ? 1 : 0,
+        G.ovr(skills),
+        now(),
         p.id,
       );
-      const lvl = await grantXp(p.id, 5);
       return {
-        message: improved ? `${G.STATS[stat]} wzrasta do ${p[stat] + 1}!` : `Trening zaliczony (${progress[stat]}/${needed}).`,
-        levelUp: lvl.levelsUp > 0 ? lvl.level : null,
+        message: r.gained
+          ? `${G.SPECS[spec].name} wzrasta do ${r.level}! OVR: ${G.ovr(skills)}`
+          : `Trening zaliczony (${r.progress}/${G.trainingsNeeded(r.level)}).`,
       };
+    }),
+  );
+
+  const hoursOf = (req) => {
+    const h = Number(req.body.hours);
+    if (!(h > 0) || h > G.AUTO_MAX_HOURS) fail(`Wybierz od 15 minut do ${G.AUTO_MAX_HOURS} godzin.`);
+    return h;
+  };
+
+  // Podgląd treningu automatycznego (nic nie zmienia).
+  app.post(
+    '/api/auto/plan',
+    needPlayer,
+    route(async (req) => {
+      const spec = specOf(req);
+      const p = await loadPlayer(req.playerId);
+      const skills = skillsOf(p);
+      return G.planAuto(skills[spec], progressOf(p)[spec] || 0, p.energy, p.money, hoursOf(req));
+    }),
+  );
+
+  // Start treningu automatycznego – koszt pobierany z góry, treningi wykonują się co 5 s.
+  app.post(
+    '/api/auto/start',
+    needPlayer,
+    action(async (req) => {
+      const spec = specOf(req);
+      const hours = hoursOf(req);
+      const p = await loadPlayer(req.playerId);
+      if (await autoFor(p.id, spec)) fail('Ta specjalizacja już trenuje automatycznie.');
+      const active = (await db.get('SELECT COUNT(*) AS n FROM auto_trainings WHERE player_id = ?', p.id)).n;
+      if (active >= G.AUTO_MAX_ACTIVE) fail(`Możesz mieć najwyżej ${G.AUTO_MAX_ACTIVE} treningi automatyczne naraz.`);
+      const skills = skillsOf(p);
+      const plan = G.planAuto(skills[spec], progressOf(p)[spec] || 0, p.energy, p.money, hours);
+      if (!plan.count) fail('Nie stać Cię nawet na jeden trening.');
+      await spendEnergy(p, plan.energy);
+      await db.run('UPDATE players SET money = money - ? WHERE id = ?', plan.money, p.id);
+      await db.run(
+        `INSERT INTO auto_trainings (player_id, spec, started_at, count, energy_total, money_total)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        p.id,
+        spec,
+        now(),
+        plan.count,
+        plan.energy,
+        plan.money,
+      );
+      return { message: `Trening automatyczny ruszył: ${plan.count} treningów „${G.SPECS[spec].name}”.` };
+    }),
+  );
+
+  // Anulowanie – zwrot kosztu za niewykonane treningi (proporcjonalnie).
+  app.post(
+    '/api/auto/cancel',
+    needPlayer,
+    action(async (req) => {
+      const spec = specOf(req);
+      const p = await loadPlayer(req.playerId); // rozlicza ukończone treningi
+      const j = await autoFor(p.id, spec);
+      if (!j) fail('Brak aktywnego treningu automatycznego.');
+      const left = j.count - j.done;
+      const energyBack = Math.floor((j.energy_total * left) / j.count);
+      const moneyBack = Math.floor((j.money_total * left) / j.count);
+      await db.run('DELETE FROM auto_trainings WHERE player_id = ? AND spec = ?', p.id, spec);
+      await db.run(
+        'UPDATE players SET money = money + ?, energy = LEAST(?, energy + ?) WHERE id = ?',
+        moneyBack,
+        G.ENERGY_MAX,
+        energyBack,
+        p.id,
+      );
+      return { message: `Anulowano. Zwrot: ${moneyBack} monet i ${energyBack} energii.` };
     }),
   );
 
@@ -376,7 +496,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     action(async (req) => {
       const p = await loadPlayer(req.playerId);
       if (now() < p.last_daily + G.DAILY_BONUS_MS) fail('Premię dzienną już odebrałeś.');
-      const amount = G.dailyBonusAmount(p.level);
+      const amount = G.dailyBonusAmount(p.ovr);
       await db.run('UPDATE players SET money = money + ?, last_daily = ? WHERE id = ?', amount, now(), p.id);
       return { message: `Odebrano premię: ${amount} monet.` };
     }),
@@ -405,7 +525,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const item = G.ITEMS_BY_ID[req.body.itemId];
       if (!item) fail('Nie ma takiego przedmiotu.');
       const p = await loadPlayer(req.playerId);
-      if (p.level < item.level) fail(`Wymagany poziom ${item.level}.`);
+      if (p.ovr < item.ovr) fail(`Wymagany OVR ${item.ovr}.`);
       if (p.money < item.price) fail('Za mało monet.');
       if (await db.get('SELECT 1 FROM inventory WHERE player_id = ? AND item_id = ?', p.id, item.id))
         fail('Masz już ten przedmiot.');
@@ -434,10 +554,10 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     route(async (req) => {
       const me = await loadPlayer(req.playerId);
       const rows = await db.all(
-        'SELECT * FROM players WHERE id != ? AND level BETWEEN ? AND ? ORDER BY last_seen DESC LIMIT 30',
+        'SELECT * FROM players WHERE id != ? AND ovr BETWEEN ? AND ? ORDER BY last_seen DESC LIMIT 30',
         me.id,
-        me.level - G.DUEL_LEVEL_RANGE,
-        me.level + G.DUEL_LEVEL_RANGE,
+        Math.ceil(me.ovr / G.DUEL_OVR_RATIO),
+        Math.floor(me.ovr * G.DUEL_OVR_RATIO),
       );
       return { opponents: await publicPlayers(rows) };
     }),
@@ -474,8 +594,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const me = await loadPlayer(req.playerId);
       const opp = await loadPlayer(oppId);
       if (!opp) fail('Nieprawidłowy rywal.');
-      if (Math.abs(opp.level - me.level) > G.DUEL_LEVEL_RANGE)
-        fail(`Rywal musi być w zasięgu ±${G.DUEL_LEVEL_RANGE} poziomów.`);
+      if (!G.inDuelRange(me.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
       await spendEnergy(me, G.DUEL_ENERGY);
       const seed = crypto.randomInt(2 ** 31);
       const result = G.simulate(
@@ -487,9 +606,9 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const [gs, ga] = result.score;
       const myRes = outcome(gs, ga);
       const oppRes = outcome(ga, gs);
-      const myRew = G.duelRewards(myRes, me.level);
-      // Wyzwany dostaje połowę nagrody (bez XP) – gra toczy się, nawet gdy jest offline.
-      const oppRew = G.duelRewards(oppRes, opp.level);
+      const myRew = G.duelRewards(myRes, me.ovr);
+      // Wyzwany dostaje połowę nagrody – gra toczy się, nawet gdy jest offline.
+      const oppRew = G.duelRewards(oppRes, opp.ovr);
       const settle = (id, money, res, goals) =>
         db.run(
           `UPDATE players SET money = money + ?, ${RESULT_COL[res]} = ${RESULT_COL[res]} + 1, goals = goals + ? WHERE id = ?`,
@@ -499,9 +618,8 @@ export function createApp(db, { now = () => Date.now() } = {}) {
         );
       await settle(me.id, myRew.money, myRes, gs);
       await settle(opp.id, Math.floor(oppRew.money / 2), oppRes, ga);
-      const lvl = await grantXp(me.id, myRew.xp);
-      await notify(opp.id, `${me.name} wyzwał Cię na sparing. Wynik: ${gs}:${ga}.`);
-      return { matchId, score: result.score, reward: myRew, levelUp: lvl.levelsUp > 0 ? lvl.level : null };
+      await notify(opp.id, `${me.name} wyzwał Cię na mecz. Wynik: ${gs}:${ga}.`);
+      return { matchId, score: result.score, reward: myRew };
     }),
   );
 
@@ -532,7 +650,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     '/api/ranking/players',
     needPlayer,
     route(async () => ({
-      players: await publicPlayers(await db.all('SELECT * FROM players ORDER BY level DESC, xp DESC LIMIT 200')),
+      players: await publicPlayers(await db.all('SELECT * FROM players ORDER BY ovr DESC LIMIT 200')),
     })),
   );
 
@@ -543,7 +661,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   );
 
   // ---------- kluby ----------
-  const clubMembers = (clubId) => db.all('SELECT * FROM players WHERE club_id = ? ORDER BY level DESC', clubId);
+  const clubMembers = (clubId) => db.all('SELECT * FROM players WHERE club_id = ? ORDER BY ovr DESC', clubId);
   async function requireOwner(req) {
     const p = await loadPlayer(req.playerId);
     const club = p.club_id ? await db.get('SELECT * FROM clubs WHERE id = ?', p.club_id) : null;
@@ -620,7 +738,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
         )),
         applications: isOwner
           ? await db.all(
-              `SELECT p.id, p.name, p.level, p.position FROM club_applications a JOIN players p ON p.id = a.player_id
+              `SELECT p.id, p.name, p.ovr, p.position FROM club_applications a JOIN players p ON p.id = a.player_id
                WHERE a.club_id = ? ORDER BY a.created_at`,
               club.id,
             )
@@ -696,7 +814,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const club = await db.get('SELECT * FROM clubs WHERE id = ?', p.club_id);
       await db.run('UPDATE players SET club_id = NULL WHERE id = ?', p.id);
       if (club.owner_id === p.id) {
-        const next = await db.get('SELECT id FROM players WHERE club_id = ? ORDER BY level DESC LIMIT 1', club.id);
+        const next = await db.get('SELECT id FROM players WHERE club_id = ? ORDER BY ovr DESC LIMIT 1', club.id);
         if (next) {
           await db.run('UPDATE clubs SET owner_id = ? WHERE id = ?', next.id, club.id);
           await notify(next.id, `Zostałeś nowym prezesem klubu ${club.name}.`);
@@ -768,7 +886,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
           c.id,
         );
         for (const m of team.members) {
-          await grantXp(m.id, rew.xp);
+          await db.run('UPDATE players SET money = money + ? WHERE id = ?', rew.money, m.id);
           await notify(m.id, `Mecz klubowy ${club.name} – ${opp.name}: ${hs}:${as}.`);
         }
       };

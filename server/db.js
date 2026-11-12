@@ -24,19 +24,13 @@ const SCHEMA = `
     user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     position TEXT NOT NULL,
-    level INTEGER NOT NULL DEFAULT 1,
-    xp INTEGER NOT NULL DEFAULT 0,
-    money INTEGER NOT NULL DEFAULT 300,
-    energy INTEGER NOT NULL DEFAULT 100,
+    ovr INTEGER NOT NULL DEFAULT 0,
+    money INTEGER NOT NULL DEFAULT 1000,
+    energy INTEGER NOT NULL DEFAULT 500,
     energy_updated BIGINT NOT NULL,
-    strzaly INTEGER NOT NULL,
-    podania INTEGER NOT NULL,
-    drybling INTEGER NOT NULL,
-    obrona INTEGER NOT NULL,
-    szybkosc INTEGER NOT NULL,
-    kondycja INTEGER NOT NULL,
-    bramkarstwo INTEGER NOT NULL,
+    skills TEXT NOT NULL,
     training_progress TEXT NOT NULL DEFAULT '{}',
+    last_train BIGINT NOT NULL DEFAULT 0,
     wins INTEGER NOT NULL DEFAULT 0,
     draws INTEGER NOT NULL DEFAULT 0,
     losses INTEGER NOT NULL DEFAULT 0,
@@ -48,6 +42,18 @@ const SCHEMA = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS players_name ON players (lower(name));
   CREATE INDEX IF NOT EXISTS players_club ON players (club_id);
+  CREATE INDEX IF NOT EXISTS players_ovr ON players (ovr DESC);
+
+  CREATE TABLE IF NOT EXISTS auto_trainings (
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    spec TEXT NOT NULL,
+    started_at BIGINT NOT NULL,
+    count INTEGER NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    energy_total INTEGER NOT NULL,
+    money_total INTEGER NOT NULL,
+    PRIMARY KEY (player_id, spec)
+  );
 
   CREATE TABLE IF NOT EXISTS inventory (
     player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,

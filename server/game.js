@@ -7,68 +7,161 @@ export const POSITIONS = {
   NAP: 'Napastnik',
 };
 
-// Prosta lista statystyk.
-export const STATS = {
-  strzaly: 'Strzały',
-  podania: 'Podania',
-  drybling: 'Drybling',
-  obrona: 'Obrona',
-  szybkosc: 'Szybkość',
-  kondycja: 'Kondycja',
-  bramkarstwo: 'Bramkarstwo',
-};
-export const STAT_KEYS = Object.keys(STATS);
+/*
+ * Trening: 6 kategorii, każda w swoim kolorze, po 2 specjalizacje.
+ * Poziom specjalizacji rośnie przez trening. OVR kategorii = suma jej specjalizacji,
+ * OVR piłkarza = suma wszystkich specjalizacji.
+ * Ikony to nazwy z zestawu Material Symbols (Google Fonts).
+ */
+export const CATEGORIES = [
+  {
+    id: 'atak', name: 'Atak', color: '#ff4d5e', icon: 'sports_soccer',
+    about: 'Zamienia akcje w gole. Im wyższy atak, tym częściej Twoje strzały kończą się bramką.',
+    positions: ['NAP', 'POM'],
+    specs: [
+      { id: 'wykonczenie', name: 'Wykończenie', icon: 'target',
+        about: 'Celność i siła strzału. Najważniejsza umiejętność napastnika – decyduje, czy sytuacja zamieni się w gola.' },
+      { id: 'drybling', name: 'Drybling', icon: 'directions_run',
+        about: 'Mijanie rywali z piłką. Pomaga wejść w pole karne i pomaga przy rozgrywaniu akcji.' },
+    ],
+  },
+  {
+    id: 'rozegranie', name: 'Rozegranie', color: '#ffc93c', icon: 'conversion_path',
+    about: 'Budowanie akcji. Dzięki niemu drużyna częściej dochodzi do sytuacji strzeleckich.',
+    positions: ['POM', 'NAP'],
+    specs: [
+      { id: 'podania', name: 'Podania', icon: 'swap_horiz',
+        about: 'Dokładne zagrania do partnerów. Mniej strat piłki, więcej akcji pod bramką rywala.' },
+      { id: 'wizja', name: 'Wizja gry', icon: 'visibility',
+        about: 'Widzenie wolnego miejsca i kolegów. Otwiera drogę do bramki, gdy rywal broni szczelnie.' },
+    ],
+  },
+  {
+    id: 'obrona', name: 'Obrona', color: '#3fa9ff', icon: 'shield',
+    about: 'Zatrzymuje ataki rywala, zanim dojdzie do strzału.',
+    positions: ['OBR', 'POM'],
+    specs: [
+      { id: 'odbior', name: 'Odbiór', icon: 'block',
+        about: 'Odbieranie piłki i wślizgi. Przerywa akcje przeciwnika w środku pola.' },
+      { id: 'ustawianie', name: 'Ustawianie się', icon: 'my_location',
+        about: 'Bycie we właściwym miejscu. Zamyka rywalom drogę do bramki i utrudnia strzały.' },
+    ],
+  },
+  {
+    id: 'fizycznosc', name: 'Fizyczność', color: '#ff8a3d', icon: 'bolt',
+    about: 'Szybkość i siła przydają się wszędzie – w ataku, w obronie i w walce o piłkę.',
+    positions: ['NAP', 'OBR', 'POM'],
+    specs: [
+      { id: 'szybkosc', name: 'Szybkość', icon: 'speed',
+        about: 'Sprint i przyspieszenie. Łatwiej uciec obrońcy albo dogonić napastnika.' },
+      { id: 'sila', name: 'Siła', icon: 'fitness_center',
+        about: 'Wygrywanie przepychanek i pojedynków. Wzmacnia obronę i utrzymanie się przy piłce.' },
+    ],
+  },
+  {
+    id: 'kondycja', name: 'Kondycja', color: '#3ee07a', icon: 'ecg_heart',
+    about: 'Utrzymuje formę do końca meczu. Bez kondycji w drugiej połowie wszystko działa słabiej.',
+    positions: ['BR', 'OBR', 'POM', 'NAP'],
+    specs: [
+      { id: 'wytrzymalosc', name: 'Wytrzymałość', icon: 'timer',
+        about: 'Bieganie przez 90 minut. Mniejszy spadek formy w drugiej połowie.' },
+      { id: 'regeneracja', name: 'Regeneracja', icon: 'autorenew',
+        about: 'Szybki powrót do sił po wysiłku. Działa razem z wytrzymałością przeciw zmęczeniu.' },
+    ],
+  },
+  {
+    id: 'bramkarstwo', name: 'Bramkarstwo', color: '#b26bff', icon: 'sports_handball',
+    about: 'Obrona strzałów. Kluczowe dla bramkarza – w meczu klubowym drużyna bez dobrego bramkarza traci dużo goli.',
+    positions: ['BR'],
+    specs: [
+      { id: 'refleks', name: 'Refleks', icon: 'flash_on',
+        about: 'Reakcja na strzał z bliska. Ratuje drużynę w sytuacjach sam na sam.' },
+      { id: 'chwytanie', name: 'Chwytanie', icon: 'back_hand',
+        about: 'Pewne łapanie piłki. Mniej dobitek i prezentów dla rywala.' },
+    ],
+  },
+];
+
+export const SPECS = Object.fromEntries(
+  CATEGORIES.flatMap((c) => c.specs.map((s) => [s.id, { ...s, category: c.id, color: c.color }])),
+);
+export const SPEC_KEYS = Object.keys(SPECS);
+// Zgodność: nazwy umiejętności (np. w sklepie).
+export const STATS = Object.fromEntries(SPEC_KEYS.map((k) => [k, SPECS[k].name]));
+export const STAT_KEYS = SPEC_KEYS;
 
 // Bonus startowy zależny od pozycji.
 const POSITION_START_BONUS = {
-  BR: { bramkarstwo: 6, obrona: 2 },
-  OBR: { obrona: 5, kondycja: 3 },
-  POM: { podania: 5, drybling: 3 },
-  NAP: { strzaly: 5, szybkosc: 3 },
+  BR: { refleks: 10, chwytanie: 10 },
+  OBR: { odbior: 10, ustawianie: 8, sila: 2 },
+  POM: { podania: 10, wizja: 8, drybling: 2 },
+  NAP: { wykonczenie: 10, drybling: 5, szybkosc: 5 },
 };
 
-export const START_STAT = 5;
-export const ENERGY_MAX = 100;
-export const ENERGY_REGEN_MS = 3 * 60 * 1000; // 1 pkt energii co 3 minuty
-export const TRAINING_ENERGY = 10;
-export const DUEL_ENERGY = 15;
+export const START_SKILL = 10;
+export const START_MONEY = 1000;
+export const ENERGY_MAX = 500;
+export const ENERGY_REGEN_MS = 10 * 1000; // 1 pkt energii co 10 s (360 na godzinę)
+export const TRAIN_COOLDOWN_MS = 5000; // jeden trening co 5 s
+export const AUTO_MAX_HOURS = 8;
+export const AUTO_MAX_ACTIVE = 3;
+export const DUEL_ENERGY = 25;
 export const CLUB_CREATE_COST = 500;
 export const CLUB_MAX_MEMBERS = 16;
 export const CLUB_MATCH_COOLDOWN_MS = 60 * 60 * 1000;
 export const DAILY_BONUS_MS = 24 * 60 * 60 * 1000;
-export const DUEL_LEVEL_RANGE = 5;
+export const DUEL_OVR_RATIO = 1.5; // rywal może mieć najwyżej 1,5× wyższy/niższy OVR
 
-export function startingStats(position) {
-  const stats = Object.fromEntries(STAT_KEYS.map((k) => [k, START_STAT]));
-  for (const [k, v] of Object.entries(POSITION_START_BONUS[position] || {})) stats[k] += v;
-  return stats;
+export function startingSkills(position) {
+  const s = Object.fromEntries(SPEC_KEYS.map((k) => [k, START_SKILL]));
+  for (const [k, v] of Object.entries(POSITION_START_BONUS[position] || {})) s[k] += v;
+  return s;
 }
 
-// Ile treningów potrzeba, by podnieść statystykę o 1 punkt.
-export function trainingsNeeded(statValue) {
-  return 1 + Math.floor(statValue / 10);
+export const ovr = (skills) => SPEC_KEYS.reduce((sum, k) => sum + (skills[k] || 0), 0);
+export const overall = ovr;
+export const categoryOvr = (skills, catId) =>
+  CATEGORIES.find((c) => c.id === catId).specs.reduce((sum, s) => sum + (skills[s.id] || 0), 0);
+
+// Koszt jednego treningu specjalizacji na danym poziomie.
+export function trainCost(level) {
+  return { energy: 5 + Math.floor(level / 25), money: 30 + level * 2 };
+}
+// Ile treningów potrzeba, by podnieść specjalizację o 1 poziom.
+export function trainingsNeeded(level) {
+  return 2 + Math.floor(level / 8);
 }
 
-// Koszt treningu w monetach – rośnie wraz z poziomem statystyki.
-export function trainingCost(statValue) {
-  return Math.floor(statValue * 1.5);
-}
-
-export function xpForNextLevel(level) {
-  return 100 * level;
-}
-
-// Dodaje XP i zwraca nowy poziom/XP oraz liczbę zdobytych poziomów.
-export function addXp(level, xp, gained) {
+// Wykonuje n treningów (bez sprawdzania kosztów) – zwraca nowy poziom i postęp.
+export function applyTrainings(level, progress, n) {
   let lvl = level;
-  let cur = xp + gained;
-  let levelsUp = 0;
-  while (cur >= xpForNextLevel(lvl)) {
-    cur -= xpForNextLevel(lvl);
-    lvl += 1;
-    levelsUp += 1;
+  let prog = progress;
+  for (let i = 0; i < n; i++) {
+    prog += 1;
+    if (prog >= trainingsNeeded(lvl)) {
+      prog = 0;
+      lvl += 1;
+    }
   }
-  return { level: lvl, xp: cur, levelsUp };
+  return { level: lvl, progress: prog, gained: lvl - level };
+}
+
+/**
+ * Plan treningu automatycznego: ile treningów zmieści się w podanym czasie
+ * i na ile wystarczy obecnej energii oraz monet (koszt rośnie z poziomem).
+ */
+export function planAuto(level, progress, energy, money, hours) {
+  const slots = Math.floor((Math.min(AUTO_MAX_HOURS, Math.max(0, hours)) * 3600 * 1000) / TRAIN_COOLDOWN_MS);
+  let lvl = level, prog = progress, count = 0, e = 0, m = 0, limit = 'time';
+  while (count < slots) {
+    const c = trainCost(lvl);
+    if (e + c.energy > energy) { limit = 'energy'; break; }
+    if (m + c.money > money) { limit = 'money'; break; }
+    e += c.energy; m += c.money; count++;
+    const r = applyTrainings(lvl, prog, 1);
+    lvl = r.level; prog = r.progress;
+  }
+  return { count, energy: e, money: m, levels: lvl - level, durationMs: count * TRAIN_COOLDOWN_MS, slots, limit };
 }
 
 // Energia liczona leniwie na podstawie znacznika czasu.
@@ -81,33 +174,34 @@ export function currentEnergy(stored, updatedAt, now = Date.now()) {
   return { energy, updatedAt: newUpdated };
 }
 
-export function dailyBonusAmount(level) {
-  return 50 + level * 10;
+export function dailyBonusAmount(o) {
+  return 50 + Math.floor(o / 5);
 }
 
-export function overall(stats) {
-  return STAT_KEYS.reduce((s, k) => s + (stats[k] || 0), 0);
+export function inDuelRange(a, b) {
+  return Math.max(a, b) <= Math.min(a, b) * DUEL_OVR_RATIO;
 }
 
-// Siła ataku i obrony pojedynczego zawodnika.
+// Siła ataku i obrony pojedynczego zawodnika (na podstawie umiejętności).
 export function attackPower(s) {
-  return s.strzaly * 0.45 + s.drybling * 0.3 + s.szybkosc * 0.25;
+  return s.wykonczenie * 0.5 + s.drybling * 0.3 + s.szybkosc * 0.2;
 }
 export function buildupPower(s) {
-  return s.podania * 0.6 + s.drybling * 0.2 + s.szybkosc * 0.2;
+  return s.podania * 0.5 + s.wizja * 0.3 + s.drybling * 0.2;
 }
 export function defensePower(s) {
-  return s.obrona * 0.6 + s.szybkosc * 0.2 + s.kondycja * 0.2;
+  return s.odbior * 0.45 + s.ustawianie * 0.35 + s.sila * 0.2;
 }
 export function keeperPower(s) {
-  return s.bramkarstwo * 0.8 + s.szybkosc * 0.2;
+  return s.refleks * 0.55 + s.chwytanie * 0.45;
 }
 
 // Zmęczenie: w drugiej połowie niska kondycja obniża formę.
 export function fatigueFactor(s, half) {
   if (half === 1) return 1;
-  const others = (overall(s) - s.kondycja) / (STAT_KEYS.length - 1) || 1;
-  return 0.85 + 0.15 * Math.min(1, s.kondycja / others);
+  const stamina = (s.wytrzymalosc + s.regeneracja) / 2;
+  const others = (ovr(s) - s.wytrzymalosc - s.regeneracja) / (SPEC_KEYS.length - 2) || 1;
+  return 0.85 + 0.15 * Math.min(1, stamina / others);
 }
 
 // Deterministyczny generator losowy (mulberry32) – mecze są powtarzalne dla danego seeda.
@@ -207,38 +301,38 @@ export function teamSide(name, members) {
   };
 }
 
-// Nagrody za mecz.
-export function duelRewards(result, level) {
-  const base = 20 + level * 4;
-  if (result === 'win') return { money: base * 2, xp: 30 };
-  if (result === 'draw') return { money: base, xp: 18 };
-  return { money: Math.floor(base / 2), xp: 10 };
+// Nagrody za mecz (rosną z OVR).
+export function duelRewards(result, o) {
+  const base = 20 + Math.floor(o / 10);
+  if (result === 'win') return { money: base * 2 };
+  if (result === 'draw') return { money: base };
+  return { money: Math.floor(base / 2) };
 }
 
 export function clubMatchRewards(result) {
-  if (result === 'win') return { points: 3, treasury: 300, xp: 40 };
-  if (result === 'draw') return { points: 1, treasury: 150, xp: 25 };
-  return { points: 0, treasury: 50, xp: 15 };
+  if (result === 'win') return { points: 3, treasury: 300, money: 120 };
+  if (result === 'draw') return { points: 1, treasury: 150, money: 60 };
+  return { points: 0, treasury: 50, money: 25 };
 }
 
-// Sklep – sprzęt dający bonusy do statystyk.
+// Sklep – sprzęt dający bonusy do umiejętności. "ovr" = wymagany OVR piłkarza.
 export const SLOTS = { buty: 'Buty', koszulka: 'Koszulka', spodenki: 'Spodenki', getry: 'Getry', rekawice: 'Rękawice' };
 export const ITEMS = [
-  { id: 'buty1', slot: 'buty', name: 'Trampki z bazaru', price: 100, level: 1, bonus: { szybkosc: 1 } },
-  { id: 'buty2', slot: 'buty', name: 'Korki „Błyskawica”', price: 600, level: 5, bonus: { szybkosc: 3, strzaly: 1 } },
-  { id: 'buty3', slot: 'buty', name: 'Korki „Kometa Pro”', price: 2500, level: 12, bonus: { szybkosc: 5, strzaly: 3 } },
-  { id: 'kosz1', slot: 'koszulka', name: 'Koszulka treningowa', price: 120, level: 1, bonus: { kondycja: 1 } },
-  { id: 'kosz2', slot: 'koszulka', name: 'Koszulka oddychająca', price: 700, level: 6, bonus: { kondycja: 3, podania: 1 } },
-  { id: 'kosz3', slot: 'koszulka', name: 'Koszulka „Gwiazda”', price: 3000, level: 14, bonus: { kondycja: 4, podania: 3 } },
-  { id: 'spod1', slot: 'spodenki', name: 'Spodenki bawełniane', price: 100, level: 1, bonus: { drybling: 1 } },
-  { id: 'spod2', slot: 'spodenki', name: 'Spodenki „Zwinne”', price: 650, level: 5, bonus: { drybling: 3 } },
-  { id: 'spod3', slot: 'spodenki', name: 'Spodenki „Tornado”', price: 2700, level: 13, bonus: { drybling: 5, szybkosc: 1 } },
-  { id: 'getr1', slot: 'getry', name: 'Getry podwórkowe', price: 90, level: 1, bonus: { obrona: 1 } },
-  { id: 'getr2', slot: 'getry', name: 'Getry z ochraniaczami', price: 600, level: 5, bonus: { obrona: 3 } },
-  { id: 'getr3', slot: 'getry', name: 'Getry „Mur”', price: 2600, level: 12, bonus: { obrona: 5, kondycja: 1 } },
-  { id: 'rek1', slot: 'rekawice', name: 'Rękawice zimowe', price: 110, level: 1, bonus: { bramkarstwo: 1 } },
-  { id: 'rek2', slot: 'rekawice', name: 'Rękawice „Pewny chwyt”', price: 700, level: 5, bonus: { bramkarstwo: 3 } },
-  { id: 'rek3', slot: 'rekawice', name: 'Rękawice „Pajęczyna”', price: 2800, level: 13, bonus: { bramkarstwo: 6 } },
+  { id: 'buty1', slot: 'buty', name: 'Trampki z bazaru', price: 100, ovr: 0, bonus: { szybkosc: 2 } },
+  { id: 'buty2', slot: 'buty', name: 'Korki „Błyskawica”', price: 600, ovr: 220, bonus: { szybkosc: 5, wykonczenie: 2 } },
+  { id: 'buty3', slot: 'buty', name: 'Korki „Kometa Pro”', price: 2500, ovr: 400, bonus: { szybkosc: 9, wykonczenie: 5 } },
+  { id: 'kosz1', slot: 'koszulka', name: 'Koszulka treningowa', price: 120, ovr: 0, bonus: { wytrzymalosc: 2 } },
+  { id: 'kosz2', slot: 'koszulka', name: 'Koszulka oddychająca', price: 700, ovr: 240, bonus: { wytrzymalosc: 5, podania: 2 } },
+  { id: 'kosz3', slot: 'koszulka', name: 'Koszulka „Gwiazda”', price: 3000, ovr: 420, bonus: { wytrzymalosc: 7, podania: 5 } },
+  { id: 'spod1', slot: 'spodenki', name: 'Spodenki bawełniane', price: 100, ovr: 0, bonus: { drybling: 2 } },
+  { id: 'spod2', slot: 'spodenki', name: 'Spodenki „Zwinne”', price: 650, ovr: 220, bonus: { drybling: 5, wizja: 1 } },
+  { id: 'spod3', slot: 'spodenki', name: 'Spodenki „Tornado”', price: 2700, ovr: 410, bonus: { drybling: 9, szybkosc: 2 } },
+  { id: 'getr1', slot: 'getry', name: 'Getry podwórkowe', price: 90, ovr: 0, bonus: { odbior: 2 } },
+  { id: 'getr2', slot: 'getry', name: 'Getry z ochraniaczami', price: 600, ovr: 220, bonus: { odbior: 5, sila: 2 } },
+  { id: 'getr3', slot: 'getry', name: 'Getry „Mur”', price: 2600, ovr: 400, bonus: { odbior: 8, ustawianie: 4 } },
+  { id: 'rek1', slot: 'rekawice', name: 'Rękawice zimowe', price: 110, ovr: 0, bonus: { chwytanie: 2 } },
+  { id: 'rek2', slot: 'rekawice', name: 'Rękawice „Pewny chwyt”', price: 700, ovr: 220, bonus: { chwytanie: 5, refleks: 2 } },
+  { id: 'rek3', slot: 'rekawice', name: 'Rękawice „Pajęczyna”', price: 2800, ovr: 410, bonus: { chwytanie: 8, refleks: 6 } },
 ];
 export const ITEMS_BY_ID = Object.fromEntries(ITEMS.map((i) => [i.id, i]));
 

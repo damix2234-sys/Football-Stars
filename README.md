@@ -30,6 +30,9 @@ Zmienne środowiskowe:
 4. Po wdrożeniu gra jest pod adresem `https://<nazwa>.onrender.com`. Każdy push na wybraną
    gałąź wdraża nową wersję automatycznie.
 
+Uwaga przy aktualizacji: schemat bazy zmienił się (OVR i specjalizacje zamiast poziomu).
+Lokalnie usuń katalog `data/`, żeby utworzyć bazę od nowa.
+
 Darmowy plan Render usypia serwer po 15 minutach bez ruchu; pierwsze wejście po przerwie
 trwa wtedy do ok. minuty. Dane są w bazie Neon, więc uśpienie ani wdrożenie ich nie kasuje.
 
@@ -38,23 +41,24 @@ trwa wtedy do ok. minuty. Dane są w bazie Neon, więc uśpienie ani wdrożenie 
 `npm run build:preview` składa `dist/football-stars.html`: całą grę w jednym pliku, z botami
 zamiast innych graczy i zapisem w przeglądarce. Silnik podglądu jest w `preview/mock-api.js`.
 
-## Co jest w grze (wersja 0.1)
+## Co jest w grze
 
 - **Konta i piłkarz:** rejestracja i logowanie (sesja w cookie). Piłkarz ma nazwę i pozycję
   (BR/OBR/POM/NAP), a pozycja daje bonus startowy.
-- **Statystyki:** Strzały, Podania, Drybling, Obrona, Szybkość, Kondycja, Bramkarstwo.
-- **Energia:** maksymalnie 100, odnawia się 1 pkt co 3 minuty. Trening kosztuje 10, sparing 15.
-- **Trening:** każdy trening zapełnia pasek postępu. Po zapełnieniu statystyka rośnie o 1.
-  Wyższe statystyki wymagają więcej treningów i monet.
-- **Poziomy:** XP za trening i mecze. Awans daje monety i pełną energię.
-- **Sparingi PvP:** wyzwanie innego gracza (±5 poziomów). Mecz jest symulowany, a relacja
-  pokazuje zdarzenia minuta po minucie. Wyzwany gracz też dostaje nagrodę i powiadomienie.
-- **Sklep:** sprzęt w 5 miejscach (buty, koszulka, spodenki, getry, rękawice) z bonusami do statystyk.
-- **Kluby:** zakładanie (500 monet), zgłoszenia, przyjmowanie i usuwanie zawodników, opis,
-  kasa klubu i wpłaty. Prezes wyzywa inne kluby na mecz, a gra 11 najlepszych zawodników.
-  Między meczami jest godzina przerwy.
-- **Ranking** piłkarzy i klubów, **czat** ogólny i klubowy, **wiadomości** (powiadomienia),
-  **premia dzienna**.
+- **OVR zamiast poziomu:** OVR piłkarza to suma wszystkich wytrenowanych specjalizacji.
+- **Trening:** 6 kategorii (każda w swoim kolorze) po 2 specjalizacje:
+  Atak (Wykończenie, Drybling), Rozegranie (Podania, Wizja gry), Obrona (Odbiór, Ustawianie się),
+  Fizyczność (Szybkość, Siła), Kondycja (Wytrzymałość, Regeneracja), Bramkarstwo (Refleks, Chwytanie).
+  OVR kategorii = suma jej specjalizacji.
+  - trening ręczny co 5 s; koszt bazowo 5 energii i 30 monet, rośnie z poziomem specjalizacji,
+  - trening automatyczny (przytrzymaj przycisk): wybierasz czas do 8 h, gra wylicza ile treningów
+    Cię stać, pobiera koszt z góry i wykonuje trening co 5 s także offline; anulowanie zwraca koszt
+    niewykonanych treningów; maks. 3 automaty naraz.
+- **Energia:** maksymalnie 500, odnawia się 1 pkt co 10 s. Mecz kosztuje 25.
+- **Mecze 1 na 1** z graczem o podobnym OVR (różnica najwyżej 1,5×), relacja minuta po minucie.
+- **Sklep:** sprzęt w 5 miejscach z bonusami do specjalizacji; lepszy sprzęt wymaga wyższego OVR.
+- **Kluby:** zakładanie (500 monet), zgłoszenia, kasa klubu, mecze klubowe (11 najlepszych zawodników).
+- **Ranking** (wg OVR), **czat** ogólny i klubowy, **wiadomości**, **premia dzienna**.
 
 ## Struktura
 

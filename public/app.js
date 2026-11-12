@@ -51,7 +51,6 @@ async function act(path, body, { reload = true } = {}) {
   try {
     const r = await api(path, body ?? {});
     if (r.message) toast(r.message);
-    if (r.levelUp) toast(`🎉 Awans na poziom ${r.levelUp}!`);
     await refreshMe();
     if (reload) render();
     return r;
@@ -93,7 +92,7 @@ function renderHud() {
   if (!logged) return;
   const e = liveEnergy(p);
   $('#hud').innerHTML = `
-    <span class="pill">⭐ Poz. ${p.level}</span>
+    <span class="pill ovr-pill" title="OVR – suma wytrenowanych umiejętności">OVR <b>${p.ovr}</b></span>
     <span class="pill">⚡ ${e.energy}/${CFG.energyMax}${e.next ? ` <span class="muted">(${mmss(e.next)})</span>` : ''}</span>
     <span class="pill">💰 ${fmt(p.money)}</span>
     <button class="ghost small" id="logout">Wyloguj</button>`;
@@ -221,7 +220,7 @@ async function viewAuth(startMode = 'register') {
               .map(
                 (p, i) => `<li><span class="l-rank">${i + 1}</span><span class="l-name">${esc(p.name)}
                   <small>${CFG.positions[p.position]}${p.club ? ` · [${esc(p.club.tag)}]` : ''}</small></span>
-                  <span class="l-score">poz. ${p.level}</span></li>`,
+                  <span class="l-score">OVR ${p.ovr}</span></li>`,
               )
               .join('')}
           </ol>
@@ -390,13 +389,21 @@ function viewCreate() {
   };
 }
 
+// Umiejętności pogrupowane w kategorie treningu (każda w swoim kolorze).
 function statsTable(p, withBonus = true) {
-  return Object.entries(CFG.stats)
-    .map(([k, label]) => {
-      const total = p.stats[k];
-      const bonus = withBonus && p.baseStats ? total - p.baseStats[k] : 0;
-      return `<div class="spread" style="padding:6px 0;border-bottom:1px solid var(--line)">
-        <span>${label}</span><b>${total}${bonus ? ` <span class="bonus">(+${bonus})</span>` : ''}</b></div>`;
+  return CFG.categories
+    .map((c) => {
+      const sum = c.specs.reduce((t, sp) => t + (p.stats[sp.id] || 0), 0);
+      return `<div class="stat-cat" style="--c:${c.color}">
+        <div class="spread"><span class="row" style="gap:8px">${icon(c.icon, 'sm')}<b>${c.name}</b></span><b class="cat-ovr">${sum}</b></div>
+        ${c.specs
+          .map((sp) => {
+            const total = p.stats[sp.id];
+            const bonus = withBonus && p.baseStats ? total - p.baseStats[sp.id] : 0;
+            return `<div class="spread stat-line"><span>${sp.name}</span><span>${total}${bonus ? ` <span class="bonus">(+${bonus})</span>` : ''}</span></div>`;
+          })
+          .join('')}
+      </div>`;
     })
     .join('');
 }
@@ -406,13 +413,11 @@ async function viewHome() {
   const e = liveEnergy(p);
   const dailyReady = now() >= p.dailyReadyAt;
   view.innerHTML = `
-    <div class="hero-head">${avatar(p, 'lg')}<div><h1>${esc(p.name)}</h1><span class="tag">${CFG.positions[p.position]}</span> <span class="tag">Poziom ${p.level}</span></div></div>
+    <div class="hero-head">${avatar(p, 'lg')}<div><h1>${esc(p.name)}</h1><span class="tag">${CFG.positions[p.position]}</span> <span class="tag ovr-tag">OVR ${p.ovr}</span></div></div>
     <div class="grid">
       <div class="card">
         <h3>Profil</h3>
-        <p>Poziom <b>${p.level}</b> · Ocena ogólna <b>${p.overall}</b></p>
-        <p class="muted" style="margin:4px 0">Doświadczenie ${p.xp}/${p.xpNext}</p>
-        <div class="bar xp"><div style="width:${(p.xp / p.xpNext) * 100}%"></div></div>
+        <p>OVR <b>${p.ovr}</b> · z ekwipunkiem <b>${p.overall}</b></p>
         <p class="muted" style="margin:12px 0 4px">Energia ${e.energy}/${CFG.energyMax}</p>
         <div class="bar energy"><div style="width:${(e.energy / CFG.energyMax) * 100}%"></div></div>
         <p style="margin-top:12px">Klub: ${p.club ? `<a href="#klub">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : '<a href="#kluby">brak – znajdź klub</a>'}</p>
@@ -463,26 +468,208 @@ async function viewHome() {
     );
 }
 
-async function viewTraining() {
+// ---------- trening ----------
+const icon = (name, size = '') => `<span class="mi ${size}" aria-hidden="true">${name}</span>`;
+const CAT_BG = { atak: 'match', rozegranie: 'club', obrona: 'match', fizycznosc: 'training', kondycja: 'training', bramkarstwo: 'match' };
+const posChips = (list) => list.map((p) => `<span class="pos-chip">${CFG.positions[p]}</span>`).join('');
+const hoursLabel = (h) => (h < 1 ? `${Math.round(h * 60)} min` : `${h} h`);
+const clock = (t) => new Date(t).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+
+async function viewTraining(catId) {
   const p = ME.player;
-  view.innerHTML = `
-    <h1>Trening</h1>
-    <p class="muted">Każdy trening kosztuje ${CFG.trainingEnergy} energii i trochę monet. Gdy zapełnisz pasek, statystyka rośnie o 1. Wyższe statystyki wymagają więcej treningów.</p>
-    <div class="card">
-      ${Object.entries(CFG.stats)
-        .map(([k, label]) => {
-          const t = p.training[k];
-          return `<div class="stat-row">
-            <span>${label}</span>
-            <span class="stat-val">${p.baseStats[k]}</span>
-            <div><div class="bar"><div style="width:${(t.progress / t.needed) * 100}%"></div></div>
-              <small class="muted">${t.progress}/${t.needed} · koszt ${t.cost} 💰</small></div>
-            <button data-s="${k}">Trenuj</button>
-          </div>`;
+  const t = p.training;
+  const cat = CFG.categories.find((c) => c.id === catId);
+  const activeAutos = t.autos.length;
+  const head = `
+    <div class="t-top">
+      <div><h1>${cat ? `<a class="t-back" href="#trening">${icon('arrow_back')}</a> ${cat.name}` : 'Trening'}</h1>
+        <p class="muted">${cat ? 'Trenuj specjalizacje – razem dają OVR kategorii.' : 'Wybierz kategorię i trenuj jej specjalizacje. Suma wszystkich to Twój OVR.'}</p></div>
+      <div class="t-sum">
+        <span class="t-chip">OVR <b>${p.ovr}</b></span>
+        <span class="t-chip">${icon('bolt', 'sm')} ${liveEnergy(p).energy}/${CFG.energyMax}</span>
+        <span class="t-chip">${icon('schedule', 'sm')} Automaty ${activeAutos}/${CFG.autoMaxActive}</span>
+      </div>
+    </div>`;
+
+  if (!cat) {
+    view.innerHTML = `${head}
+      <div class="t-grid">
+        ${CFG.categories
+          .map((c) => {
+            const specs = c.specs.map((s) => t.specs[s.id]);
+            const pct = Math.round((specs.reduce((a, s) => a + s.progress / s.needed, 0) / specs.length) * 100);
+            const auto = t.autos.some((a) => c.specs.some((s) => s.id === a.spec));
+            return `<article class="tcat" style="--c:${c.color};--bg:url('${IMG(CAT_BG[c.id])}')">
+              <a class="tcat-main" href="#trening-${c.id}">
+                <div class="tcat-head"><h3>${c.name}</h3>
+                  <div class="tcat-specs">${c.specs.map((s) => `<span class="orb xs" title="${s.name}">${icon(s.icon)}</span>`).join('')}</div></div>
+                <div class="tcat-body">
+                  <span class="orb lg">${icon(c.icon)}</span>
+                  <div class="tcat-prog"><span>${pct}%</span><div class="tbar"><div style="width:${pct}%"></div></div></div>
+                  <span class="ovr-badge" title="OVR kategorii">${t.categories[c.id]}</span>
+                </div>
+                <span class="tcat-go">${auto ? `${icon('autorenew', 'sm')} trenuje automatycznie · ` : ''}Trenuj specjalizacje ${icon('chevron_right', 'sm')}</span>
+              </a>
+              <div class="tinfo">
+                <p>${c.about}</p>
+                <div class="tinfo-pos">Najbardziej przydaje się: ${posChips(c.positions)}</div>
+              </div>
+            </article>`;
+          })
+          .join('')}
+      </div>`;
+    return;
+  }
+
+  view.innerHTML = `${head}
+    <div class="tcat-banner" style="--c:${cat.color}">
+      <span class="orb lg">${icon(cat.icon)}</span>
+      <div><b>Specjalizacja: ${cat.name}</b><p>${cat.about}</p><div class="tinfo-pos">${posChips(cat.positions)}</div></div>
+      <span class="ovr-badge">${t.categories[cat.id]}</span>
+    </div>
+    <div class="t-grid">
+      ${cat.specs
+        .map((s) => {
+          const st = t.specs[s.id];
+          const pct = Math.round((st.progress / st.needed) * 100);
+          const auto = t.autos.find((a) => a.spec === s.id);
+          return `<article class="tspec tcat" style="--c:${cat.color};--bg:url('${IMG(CAT_BG[cat.id])}')">
+            <div class="tcat-main">
+              <div class="tcat-head"><h3>${s.name}</h3>${auto ? `<span class="auto-tag">${icon('autorenew', 'sm')} automat</span>` : ''}</div>
+              <div class="tcat-body">
+                <span class="orb lg">${icon(s.icon)}</span>
+                <div class="tcat-prog"><span>${pct}% do poziomu ${st.level + 1}</span><div class="tbar"><div style="width:${pct}%"></div></div></div>
+                <span class="ovr-badge" title="Poziom specjalizacji">${st.level}</span>
+              </div>
+              <div class="tcost">
+                <span>${icon('payments', 'sm')} ${fmt(st.cost.money)}</span>
+                <span>${icon('bolt', 'sm')} ${st.cost.energy}</span>
+                <span>${icon('timer', 'sm')} 5 s</span>
+              </div>
+              ${
+                auto
+                  ? `<div class="auto-box" data-auto="${s.id}" data-ends="${auto.endsAt}" data-count="${auto.count}">
+                      <div class="spread"><span>Automat: <b class="auto-done">${auto.done}</b>/${auto.count}</span><span class="muted">koniec ${clock(auto.endsAt)}</span></div>
+                      <div class="tbar"><div class="auto-bar" style="width:${(auto.done / auto.count) * 100}%"></div></div>
+                      <button class="small ghost" data-cancel="${s.id}">Anuluj (zwrot za resztę)</button>
+                    </div>`
+                  : `<button class="train-btn" data-train="${s.id}"><span class="train-label">Trenuj</span><span class="train-cd"></span></button>
+                     <p class="hold-hint">${icon('touch_app', 'sm')} Przytrzymaj, aby ustawić trening automatyczny</p>`
+              }
+            </div>
+            <div class="tinfo"><p>${s.about}</p></div>
+          </article>`;
         })
         .join('')}
     </div>`;
-  view.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => act('/train', { stat: b.dataset.s })));
+
+  // Odliczanie 5 s po treningu i postęp automatów na żywo.
+  const tick = () => {
+    const left = t.readyAt - now();
+    view.querySelectorAll('[data-train]').forEach((b) => {
+      b.classList.toggle('cooling', left > 0);
+      b.style.setProperty('--cd', Math.max(0, left / CFG.trainCooldownMs));
+      b.querySelector('.train-cd').textContent = left > 0 ? `${Math.ceil(left / 1000)} s` : '';
+    });
+    view.querySelectorAll('[data-auto]').forEach((box) => {
+      const count = Number(box.dataset.count);
+      const start = Number(box.dataset.ends) - count * CFG.trainCooldownMs;
+      const done = Math.min(count, Math.floor((now() - start) / CFG.trainCooldownMs));
+      box.querySelector('.auto-done').textContent = done;
+      box.querySelector('.auto-bar').style.width = `${(done / count) * 100}%`;
+      if (done >= count) render();
+    });
+  };
+  tick();
+  timers.push(setInterval(tick, 250));
+
+  view.querySelectorAll('[data-cancel]').forEach((b) => (b.onclick = confirmClick(() => act('/auto/cancel', { spec: b.dataset.cancel }))));
+  view.querySelectorAll('[data-train]').forEach((b) => {
+    let holdTimer = null;
+    let held = false;
+    b.addEventListener('contextmenu', (e) => e.preventDefault());
+    b.addEventListener('pointerdown', () => {
+      held = false;
+      b.classList.add('pressing');
+      holdTimer = setTimeout(() => {
+        held = true;
+        b.classList.remove('pressing');
+        autoPanel(b.dataset.train);
+      }, 550);
+    });
+    const end = () => {
+      clearTimeout(holdTimer);
+      b.classList.remove('pressing');
+    };
+    b.addEventListener('pointerleave', end);
+    b.addEventListener('pointercancel', end);
+    b.addEventListener('pointerup', async () => {
+      end();
+      if (held || b.classList.contains('cooling')) return;
+      b.classList.add('flash');
+      await act('/train', { spec: b.dataset.train });
+    });
+  });
+}
+
+// Panel treningu automatycznego: wybór czasu, wyliczenie kosztów i start.
+function autoPanel(spec) {
+  const s = CFG.categories.flatMap((c) => c.specs.map((x) => ({ ...x, color: c.color }))).find((x) => x.id === spec);
+  const options = [0.25, 0.5, 1, 2, 4, 8].filter((h) => h <= CFG.autoMaxHours);
+  let hours = 1;
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-wrap';
+  wrap.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="--c:${s.color}">
+      <div class="row" style="gap:12px"><span class="orb">${icon(s.icon)}</span>
+        <div><h2 style="margin:0">Trening automatyczny</h2><span class="muted">${s.name}</span></div></div>
+      <p class="muted">Ustaw, jak długo trenować. Trening wykonuje się co 5 sekund, także gdy nie ma Cię w grze. Koszt pobierany jest z góry – anulowanie zwraca koszt niewykonanych treningów.</p>
+      <div class="hours">${options.map((h) => `<button class="hbtn" data-h="${h}">${hoursLabel(h)}</button>`).join('')}</div>
+      <input id="auto-range" type="range" min="0.25" max="${CFG.autoMaxHours}" step="0.25" value="1" aria-label="Czas treningu w godzinach">
+      <div class="plan" id="plan">Liczę…</div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="ghost" id="auto-close">Zamknij</button>
+        <button id="auto-go" disabled>Rozpocznij</button>
+      </div>
+    </div>`;
+  document.body.append(wrap);
+  const close = () => wrap.remove();
+  wrap.addEventListener('click', (e) => e.target === wrap && close());
+  wrap.querySelector('#auto-close').onclick = close;
+  const range = wrap.querySelector('#auto-range');
+  let req = 0;
+  const update = async () => {
+    wrap.querySelectorAll('.hbtn').forEach((b) => b.classList.toggle('on', Number(b.dataset.h) === hours));
+    range.value = hours;
+    const id = ++req;
+    try {
+      const plan = await api('/auto/plan', { spec, hours });
+      if (id !== req) return;
+      const why = { time: 'wybrany czas', energy: 'energia', money: 'monety' }[plan.limit];
+      wrap.querySelector('#plan').innerHTML = plan.count
+        ? `<div class="plan-grid">
+            <div><b>${plan.count}</b><span>treningów</span></div>
+            <div><b>+${plan.levels}</b><span>poziomów</span></div>
+            <div><b>${fmt(plan.money)}</b><span>monet</span></div>
+            <div><b>${plan.energy}</b><span>energii</span></div>
+          </div>
+          <p class="muted">Potrwa ${Math.ceil(plan.durationMs / 60000)} min (koniec ok. ${clock(now() + plan.durationMs)}). Ogranicza Cię: <b>${why}</b>.</p>`
+        : `<p class="err-text">Nie stać Cię nawet na jeden trening – zdobądź monety albo poczekaj na energię.</p>`;
+      wrap.querySelector('#auto-go').disabled = !plan.count;
+    } catch (e) {
+      wrap.querySelector('#plan').textContent = e.message;
+    }
+  };
+  wrap.querySelectorAll('.hbtn').forEach((b) => (b.onclick = () => ((hours = Number(b.dataset.h)), update())));
+  range.oninput = () => {
+    hours = Number(range.value);
+    update();
+  };
+  wrap.querySelector('#auto-go').onclick = async () => {
+    const r = await act('/auto/start', { spec, hours });
+    if (r) close();
+  };
+  update();
 }
 
 function matchRow(m, perspectiveId) {
@@ -501,16 +688,16 @@ async function viewDuels() {
   const p = ME.player;
   view.innerHTML = `
     <h1>Sparingi</h1>
-    <p class="muted">Wyzwij innego gracza (±${CFG.duelLevelRange} poziomów) na mecz jeden na jednego. Koszt: ${CFG.duelEnergy} energii.</p>
+    <p class="muted">Wyzwij innego gracza o podobnym OVR na mecz jeden na jednego. Koszt: ${CFG.duelEnergy} energii.</p>
     <div class="grid">
       <div class="card">
         <h3>Rywale</h3>
         <div class="table-wrap"><table>
-          <tr><th>Piłkarz</th><th>Poz.</th><th>Ocena</th><th></th></tr>
+          <tr><th>Piłkarz</th><th>OVR</th><th></th></tr>
           ${opponents
             .map(
               (o) => `<tr><td class="who">${avatar(o, 'sm')}<span class="dot ${o.online ? 'on' : ''}"></span><a href="#gracz-${o.id}">${esc(o.name)}</a>
-                <span class="tag">${o.position}</span></td><td>${o.level}</td><td>${o.overall}</td>
+                <span class="tag">${o.position}</span></td><td><b>${o.ovr}</b></td>
                 <td><button class="small" data-o="${o.id}">Wyzwij</button></td></tr>`,
             )
             .join('') || '<tr><td colspan="4" class="muted">Brak rywali w Twoim zasięgu. Zaproś znajomych!</td></tr>'}
@@ -571,11 +758,11 @@ async function viewMatch(id) {
 async function viewPlayer(id) {
   const { player: p, matches } = await api('/players/' + id);
   view.innerHTML = `
-    <div class="hero-head">${avatar(p, 'lg')}<div><h1><span class="dot ${p.online ? 'on' : ''}"></span>${esc(p.name)}</h1><span class="tag">${CFG.positions[p.position]}</span> <span class="tag">Poziom ${p.level}</span></div></div>
+    <div class="hero-head">${avatar(p, 'lg')}<div><h1><span class="dot ${p.online ? 'on' : ''}"></span>${esc(p.name)}</h1><span class="tag">${CFG.positions[p.position]}</span> <span class="tag ovr-tag">OVR ${p.ovr}</span></div></div>
     <div class="grid">
       <div class="card">
         <h3>Profil</h3>
-        <p>Poziom <b>${p.level}</b> · Ocena <b>${p.overall}</b></p>
+        <p>OVR <b>${p.ovr}</b> · z ekwipunkiem <b>${p.overall}</b></p>
         <p>Klub: ${p.club ? `<a href="#klub-${p.club.id}">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : 'brak'}</p>
         <p>Bilans: <b>${p.wins}</b>W · <b>${p.draws}</b>R · <b>${p.losses}</b>P · ⚽ ${p.goals}</p>
         ${p.id !== ME.player.id ? `<button id="duel">Wyzwij na sparing</button>` : ''}
@@ -610,9 +797,9 @@ async function viewShop() {
               if (i.id in owned)
                 btn = owned[i.id] ? '<span class="tag on">Założone</span>' : `<button class="small ghost" data-eq="${i.id}">Załóż</button>`;
               else
-                btn = `<button class="small" data-buy="${i.id}" ${p.level < i.level || p.money < i.price ? 'disabled' : ''}>${fmt(i.price)} 💰</button>`;
+                btn = `<button class="small" data-buy="${i.id}" ${p.ovr < i.ovr || p.money < i.price ? 'disabled' : ''}>${fmt(i.price)} 💰</button>`;
               return `<div class="item"><div><b>${esc(i.name)}</b><br><small class="bonus">${bonus}</small>
-                ${p.level < i.level ? `<br><small class="muted">Wymaga poz. ${i.level}</small>` : ''}</div>${btn}</div>`;
+                ${p.ovr < i.ovr ? `<br><small class="muted">Wymaga OVR ${i.ovr}</small>` : ''}</div>${btn}</div>`;
             })
             .join('')}</div>`,
         )
@@ -689,12 +876,12 @@ async function viewClub(id) {
       <div class="card">
         <h3>Kadra (${d.members.length}/${CFG.clubMaxMembers})</h3>
         <div class="table-wrap"><table>
-          <tr><th>Piłkarz</th><th>Poz.</th><th>Ocena</th>${d.isOwner ? '<th></th>' : ''}</tr>
+          <tr><th>Piłkarz</th><th>OVR</th>${d.isOwner ? '<th></th>' : ''}</tr>
           ${d.members
             .map(
               (m) => `<tr><td class="who">${avatar(m, 'sm')}<span class="dot ${m.online ? 'on' : ''}"></span><a href="#gracz-${m.id}">${esc(m.name)}</a>
                 ${m.id === c.ownerId ? '<span class="tag on">Prezes</span>' : ''} <span class="tag">${m.position}</span></td>
-                <td>${m.level}</td><td>${m.overall}</td>
+                <td><b>${m.ovr}</b></td>
                 ${d.isOwner ? `<td>${m.id !== p.id ? `<button class="small ghost" data-kick="${m.id}">Usuń</button>` : ''}</td>` : ''}</tr>`,
             )
             .join('')}
@@ -705,7 +892,7 @@ async function viewClub(id) {
         d.isOwner && d.applications.length
           ? `<div class="card"><h3>Zgłoszenia</h3>${d.applications
               .map(
-                (a) => `<div class="item"><span>${esc(a.name)} <span class="tag">${a.position}</span> poz. ${a.level}</span>
+                (a) => `<div class="item"><span>${esc(a.name)} <span class="tag">${a.position}</span> OVR ${a.ovr}</span>
                   <span class="row"><button class="small" data-acc="${a.id}">Przyjmij</button><button class="small ghost" data-rej="${a.id}">Odrzuć</button></span></div>`,
               )
               .join('')}</div>`
@@ -774,11 +961,11 @@ async function viewRanking(tab = 'gracze') {
     <div class="card table-wrap"><table>
       ${
         players
-          ? `<tr><th>#</th><th>Piłkarz</th><th>Klub</th><th>Poz.</th><th>Ocena</th><th>W/R/P</th></tr>
+          ? `<tr><th>#</th><th>Piłkarz</th><th>Klub</th><th>OVR</th><th>W/R/P</th></tr>
              ${data.players
                .map(
                  (p, i) => `<tr><td>${i + 1}</td><td class="who">${avatar(p, 'sm')}<a href="#gracz-${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
-                 <td>${p.club ? `[${esc(p.club.tag)}]` : '–'}</td><td>${p.level}</td><td>${p.overall}</td><td>${p.wins}/${p.draws}/${p.losses}</td></tr>`,
+                 <td>${p.club ? `[${esc(p.club.tag)}]` : '–'}</td><td><b>${p.ovr}</b></td><td>${p.wins}/${p.draws}/${p.losses}</td></tr>`,
                )
                .join('')}`
           : `<tr><th>#</th><th>Klub</th><th>Członkowie</th><th>Pkt</th><th>W/R/P</th></tr>

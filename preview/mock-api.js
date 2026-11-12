@@ -1,7 +1,7 @@
 // Wersja podglądowa: ten sam interfejs co serwer (/api/...), ale cała gra działa
 // w przeglądarce, a pozostali gracze to boty. Wymaga obiektu G (server/game.js).
 (() => {
-  const KEY = 'football-stars-preview-v1';
+  const KEY = 'football-stars-preview-v2';
   const now = () => Date.now();
   let S = null; // stan gry – wczytywany na końcu pliku, gdy wszystkie funkcje są gotowe
 
@@ -26,7 +26,7 @@
 
   // ---------- dane startowe: boty, kluby, czat ----------
   function seed() {
-    S = { seq: {}, users: [], session: null, players: [], inventory: [], clubs: [], apps: [], matches: [], messages: [], notifications: [], botTick: now() };
+    S = { seq: {}, users: [], session: null, players: [], inventory: [], clubs: [], apps: [], matches: [], messages: [], notifications: [], autos: [], botTick: now() };
     const bots = [
       ['Marek Mur', 'OBR', 4], ['Tomek Rakieta', 'NAP', 6], ['Piotr Pajęczyna', 'BR', 5], ['Ola Rozgrywająca', 'POM', 3],
       ['Bartek Skała', 'OBR', 2], ['Zosia Zwinna', 'POM', 4], ['Kuba Kometa', 'NAP', 1], ['Igor Wieża', 'BR', 2],
@@ -35,10 +35,10 @@
     for (const [name, pos, lvl] of bots) {
       const p = makePlayer(null, name, pos);
       p.bot = true;
-      p.level = lvl;
-      // statystyki rosną z poziomem, z lekką losowością
-      for (const k of G.STAT_KEYS) p[k] += Math.floor((lvl - 1) * (1.2 + Math.random()));
-      p.money = 200 + lvl * 50;
+      // umiejętności rosną z "doświadczeniem" bota, z lekką losowością
+      for (const k of G.SPEC_KEYS) p.skills[k] += Math.floor((lvl - 1) * (2 + Math.random() * 3));
+      p.ovr = G.ovr(p.skills);
+      p.money = 400 + lvl * 100;
       p.last_seen = now() - Math.floor(Math.random() * 20) * 60000;
     }
     const byName = (n) => S.players.find((p) => p.name === n);
@@ -55,18 +55,18 @@
       const b = bs.filter((x) => x !== a)[Math.floor(Math.random() * (bs.length - 1))];
       duel(a, b, now() - (6 - i) * 1800e3);
     }
-    say(byName('Tomek Rakieta'), 'Siema wszystkim! Kto na sparing?', now() - 40 * 60000);
+    say(byName('Tomek Rakieta'), 'Siema wszystkim! Kto na mecz?', now() - 40 * 60000);
     say(byName('Ola Rozgrywająca'), 'Ja chętnie, tylko poczekam na energię ⚡', now() - 38 * 60000);
     say(byName('Marek Mur'), 'Orły szukają napastnika, zgłaszajcie się 🦅', now() - 12 * 60000);
     return S;
   }
 
   function makePlayer(userId, name, position) {
-    const s = G.startingStats(position);
+    const skills = G.startingSkills(position);
     const p = {
-      id: nextId('player'), user_id: userId, name, position, level: 1, xp: 0, money: 300,
-      energy: G.ENERGY_MAX, energy_updated: now(), training_progress: {}, wins: 0, draws: 0, losses: 0, goals: 0,
-      club_id: null, last_daily: 0, last_seen: now(), created_at: now(), ...s,
+      id: nextId('player'), user_id: userId, name, position, skills, ovr: G.ovr(skills), money: G.START_MONEY,
+      energy: G.ENERGY_MAX, energy_updated: now(), training_progress: {}, last_train: 0, wins: 0, draws: 0, losses: 0, goals: 0,
+      club_id: null, last_daily: 0, last_seen: now(), created_at: now(),
     };
     S.players.push(p);
     return p;
@@ -87,13 +87,31 @@
     const e = G.currentEnergy(p.energy, p.energy_updated, now());
     p.energy = e.energy;
     p.energy_updated = e.updatedAt;
+    settleAutos(p);
     return p;
   };
+  // Rozlicza ukończone treningi automatyczne (jeden trening co 5 s).
+  function settleAutos(p) {
+    for (const j of S.autos.filter((a) => a.player_id === p.id)) {
+      const completed = Math.min(j.count, Math.floor((now() - j.started_at) / G.TRAIN_COOLDOWN_MS));
+      if (completed > j.done) {
+        const r = G.applyTrainings(p.skills[j.spec], p.training_progress[j.spec] || 0, completed - j.done);
+        p.skills[j.spec] = r.level;
+        p.training_progress[j.spec] = r.progress;
+        j.done = completed;
+        p.ovr = G.ovr(p.skills);
+      }
+      if (completed >= j.count) {
+        S.autos = S.autos.filter((a) => a !== j);
+        notify(p.id, `Trening automatyczny „${G.SPECS[j.spec].name}” zakończony (${j.count} treningów).`);
+      }
+    }
+  }
   const club = (id) => S.clubs.find((c) => c.id === id) || null;
-  const baseStats = (p) => Object.fromEntries(G.STAT_KEYS.map((k) => [k, p[k]]));
+  const baseStats = (p) => p.skills;
   const equippedIds = (pid) => S.inventory.filter((i) => i.player_id === pid && i.equipped).map((i) => i.item_id);
   const effStats = (p) => G.effectiveStats(baseStats(p), equippedIds(p.id));
-  const members = (cid) => S.players.filter((p) => p.club_id === cid).sort((a, b) => b.level - a.level);
+  const members = (cid) => S.players.filter((p) => p.club_id === cid).sort((a, b) => b.ovr - a.ovr);
   const outcome = (a, b) => (a > b ? 'win' : a < b ? 'loss' : 'draw');
   const COL = { win: 'wins', draw: 'draws', loss: 'losses' };
 
@@ -102,24 +120,11 @@
     if (p.energy >= G.ENERGY_MAX) p.energy_updated = now();
     p.energy -= n;
   }
-  function grantXp(p, gained) {
-    const r = G.addXp(p.level, p.xp, gained);
-    p.level = r.level;
-    p.xp = r.xp;
-    if (r.levelsUp > 0) {
-      const bonus = 100 * r.levelsUp;
-      p.money += bonus;
-      p.energy = G.ENERGY_MAX;
-      p.energy_updated = now();
-      notify(p.id, `Awans na poziom ${r.level}! Otrzymujesz ${bonus} monet i pełną energię.`);
-    }
-    return r;
-  }
   function publicPlayer(p) {
     const c = p.club_id ? club(p.club_id) : null;
     const stats = effStats(p);
     return {
-      id: p.id, name: p.name, position: p.position, level: p.level, stats, overall: G.overall(stats),
+      id: p.id, name: p.name, position: p.position, ovr: p.ovr, stats, overall: G.ovr(stats),
       wins: p.wins, draws: p.draws, losses: p.losses, goals: p.goals,
       club: c ? { id: c.id, name: c.name, tag: c.tag } : null,
       online: now() - p.last_seen < 5 * 60 * 1000,
@@ -138,17 +143,16 @@
     const [gs, ga] = result.score;
     const myRes = outcome(gs, ga);
     const oppRes = outcome(ga, gs);
-    const myRew = G.duelRewards(myRes, me.level);
-    const oppRew = G.duelRewards(oppRes, opp.level);
+    const myRew = G.duelRewards(myRes, me.ovr);
+    const oppRew = G.duelRewards(oppRes, opp.ovr);
     me.money += myRew.money;
     me[COL[myRes]]++;
     me.goals += gs;
     opp.money += Math.floor(oppRew.money / 2);
     opp[COL[oppRes]]++;
     opp.goals += ga;
-    const lvl = grantXp(me, myRew.xp);
-    notify(opp.id, `${me.name} wyzwał Cię na sparing. Wynik: ${gs}:${ga}.`);
-    return { m, myRew, lvl };
+    notify(opp.id, `${me.name} wyzwał Cię na mecz. Wynik: ${gs}:${ga}.`);
+    return { m, myRew };
   }
 
   function clubMatch(home, away, t = now()) {
@@ -169,7 +173,7 @@
       c.treasury += rew.treasury;
       c[COL[res]]++;
       for (const x of tm.ms) {
-        grantXp(x.p, rew.xp);
+        x.p.money += rew.money;
         notify(x.p.id, `Mecz klubowy ${home.name} – ${away.name}: ${hs}:${as}.`);
       }
     };
@@ -181,8 +185,8 @@
 
   // ---------- życie botów (wywoływane przy każdym zapytaniu) ----------
   const BOT_LINES = [
-    'Ktoś ma pomysł, co trenować na początku?', 'Właśnie wbiłem nowy poziom 🎉', 'Dobry mecz wczoraj!',
-    'Szukam klubu, gram na pomocy.', 'Szybkość to podstawa 😎', 'Kto zagra sparing?', 'Rękawice „Pewny chwyt” robią robotę.',
+    'Ktoś ma pomysł, co trenować na początku?', 'Właśnie przebiłem 300 OVR 🎉', 'Dobry mecz wczoraj!',
+    'Szukam klubu, gram na pomocy.', 'Szybkość to podstawa 😎', 'Kto zagra mecz?', 'Rękawice „Pewny chwyt” robią robotę.',
     'Gramy dziś mecz klubowy, trzymajcie kciuki!',
   ];
   function botLife() {
@@ -197,10 +201,10 @@
       b.last_seen = S.botTick;
       const r = Math.random();
       if (r < 0.3) say(b, pick(BOT_LINES), S.botTick);
-      else if (r < 0.55 && me && Math.abs(b.level - me.level) <= G.DUEL_LEVEL_RANGE) duel(b, me, S.botTick);
+      else if (r < 0.55 && me && G.inDuelRange(b.ovr, me.ovr)) duel(b, me, S.botTick);
       else if (r < 0.8) {
-        for (const k of G.STAT_KEYS) if (Math.random() < 0.15) b[k]++;
-        grantXp(b, 20);
+        for (const k of G.SPEC_KEYS) if (Math.random() < 0.2) b.skills[k]++;
+        b.ovr = G.ovr(b.skills);
       } else if (me?.club_id) {
         const c = club(me.club_id);
         if (c.owner_id === me.id) {
@@ -256,13 +260,14 @@
     matches: S.matches.slice(-12).reverse().map(({ home_name, away_name, home_score, away_score }) => ({ home_name, away_name, home_score, away_score })),
   }));
   get('/public/top', () => ({
-    players: [...S.players].sort((a, b) => b.level - a.level || b.xp - a.xp).slice(0, 5).map((p) => publicPlayer(p)),
+    players: [...S.players].sort((a, b) => b.ovr - a.ovr).slice(0, 5).map((p) => publicPlayer(p)),
     clubs: [...S.clubs].sort((a, b) => b.points - a.points || b.wins - a.wins).slice(0, 5).map(clubRow),
   }));
   get('/config', () => ({
     positions: G.POSITIONS, stats: G.STATS, slots: G.SLOTS, items: G.ITEMS, energyMax: G.ENERGY_MAX,
-    energyRegenMs: G.ENERGY_REGEN_MS, trainingEnergy: G.TRAINING_ENERGY, duelEnergy: G.DUEL_ENERGY,
-    clubCreateCost: G.CLUB_CREATE_COST, clubMaxMembers: G.CLUB_MAX_MEMBERS, duelLevelRange: G.DUEL_LEVEL_RANGE,
+    energyRegenMs: G.ENERGY_REGEN_MS, categories: G.CATEGORIES, trainCooldownMs: G.TRAIN_COOLDOWN_MS,
+    autoMaxHours: G.AUTO_MAX_HOURS, autoMaxActive: G.AUTO_MAX_ACTIVE, duelEnergy: G.DUEL_ENERGY,
+    clubCreateCost: G.CLUB_CREATE_COST, clubMaxMembers: G.CLUB_MAX_MEMBERS, duelOvrRatio: G.DUEL_OVR_RATIO,
   }));
   post('/player', (b) => {
     if (!S.session) fail('Zaloguj się.');
@@ -272,7 +277,7 @@
     if (!G.POSITIONS[b.position]) fail('Wybierz pozycję.');
     if (S.players.some((p) => p.name.toLowerCase() === name.toLowerCase())) fail('Ta nazwa jest zajęta.');
     const p = makePlayer(S.session, name, b.position);
-    notify(p.id, 'Witaj w Football Stars! Zacznij od treningu, a potem zagraj pierwszy sparing.');
+    notify(p.id, 'Witaj w Football Stars! Zacznij od treningu, a potem zagraj pierwszy mecz.');
   });
   get('/me', () => {
     if (!S.session) return { user: null };
@@ -287,9 +292,9 @@
       user,
       player: {
         ...publicPlayer(p), baseStats: base,
-        training: Object.fromEntries(G.STAT_KEYS.map((k) => [k, { progress: p.training_progress[k] || 0, needed: G.trainingsNeeded(base[k]), cost: G.trainingCost(base[k]) }])),
-        xp: p.xp, xpNext: G.xpForNextLevel(p.level), money: p.money, energy: p.energy, energyUpdated: p.energy_updated,
-        dailyReadyAt: p.last_daily + G.DAILY_BONUS_MS, dailyAmount: G.dailyBonusAmount(p.level),
+        training: trainingState(p),
+        money: p.money, energy: p.energy, energyUpdated: p.energy_updated,
+        dailyReadyAt: p.last_daily + G.DAILY_BONUS_MS, dailyAmount: G.dailyBonusAmount(p.ovr),
         clubRole: c ? (c.owner_id === p.id ? 'owner' : 'member') : null,
         unread: S.notifications.filter((n) => n.player_id === p.id && !n.read).length,
       },
@@ -303,29 +308,83 @@
     const matches = S.matches.filter((m) => m.kind === 'duel' && (m.home_id === p.id || m.away_id === p.id)).slice(-10).reverse().map(listMatch);
     return { player: publicPlayer(p), matches };
   });
+  function trainingState(p) {
+    return {
+      specs: Object.fromEntries(G.SPEC_KEYS.map((k) => [k, {
+        level: p.skills[k], progress: p.training_progress[k] || 0, needed: G.trainingsNeeded(p.skills[k]), cost: G.trainCost(p.skills[k]),
+      }])),
+      categories: Object.fromEntries(G.CATEGORIES.map((c) => [c.id, G.categoryOvr(p.skills, c.id)])),
+      readyAt: p.last_train + G.TRAIN_COOLDOWN_MS,
+      autos: S.autos.filter((j) => j.player_id === p.id).map((j) => ({
+        spec: j.spec, count: j.count, done: j.done, endsAt: j.started_at + j.count * G.TRAIN_COOLDOWN_MS,
+      })),
+    };
+  }
+  const specOf = (b) => {
+    if (!G.SPECS[b.spec]) fail('Nieznana specjalizacja.');
+    return b.spec;
+  };
+  const hoursOf = (b) => {
+    const h = Number(b.hours);
+    if (!(h > 0) || h > G.AUTO_MAX_HOURS) fail(`Wybierz od 15 minut do ${G.AUTO_MAX_HOURS} godzin.`);
+    return h;
+  };
   post('/train', (b) => {
     const p = me();
-    const stat = String(b.stat || '');
-    if (!G.STATS[stat]) fail('Nieznana statystyka.');
-    const cost = G.trainingCost(p[stat]);
-    if (p.money < cost) fail(`Trening kosztuje ${cost} monet.`);
-    spendEnergy(p, G.TRAINING_ENERGY);
-    p.money -= cost;
-    const needed = G.trainingsNeeded(p[stat]);
-    p.training_progress[stat] = (p.training_progress[stat] || 0) + 1;
-    let msg = `Trening zaliczony (${p.training_progress[stat]}/${needed}).`;
-    if (p.training_progress[stat] >= needed) {
-      p.training_progress[stat] = 0;
-      p[stat]++;
-      msg = `${G.STATS[stat]} wzrasta do ${p[stat]}!`;
-    }
-    const lvl = grantXp(p, 5);
-    return { message: msg, levelUp: lvl.levelsUp > 0 ? lvl.level : null };
+    const spec = specOf(b);
+    if (now() < p.last_train + G.TRAIN_COOLDOWN_MS) fail('Odpocznij chwilę – trening co 5 sekund.');
+    if (S.autos.some((j) => j.player_id === p.id && j.spec === spec)) fail('Ta specjalizacja trenuje teraz automatycznie.');
+    const cost = G.trainCost(p.skills[spec]);
+    if (p.money < cost.money) fail(`Trening kosztuje ${cost.money} monet.`);
+    spendEnergy(p, cost.energy);
+    p.money -= cost.money;
+    const r = G.applyTrainings(p.skills[spec], p.training_progress[spec] || 0, 1);
+    p.skills[spec] = r.level;
+    p.training_progress[spec] = r.progress;
+    p.ovr = G.ovr(p.skills);
+    p.last_train = now();
+    return {
+      message: r.gained
+        ? `${G.SPECS[spec].name} wzrasta do ${r.level}! OVR: ${p.ovr}`
+        : `Trening zaliczony (${r.progress}/${G.trainingsNeeded(r.level)}).`,
+    };
+  });
+  post('/auto/plan', (b) => {
+    const p = me();
+    const spec = specOf(b);
+    return G.planAuto(p.skills[spec], p.training_progress[spec] || 0, p.energy, p.money, hoursOf(b));
+  });
+  post('/auto/start', (b) => {
+    const p = me();
+    const spec = specOf(b);
+    const hours = hoursOf(b);
+    if (S.autos.some((j) => j.player_id === p.id && j.spec === spec)) fail('Ta specjalizacja już trenuje automatycznie.');
+    if (S.autos.filter((j) => j.player_id === p.id).length >= G.AUTO_MAX_ACTIVE)
+      fail(`Możesz mieć najwyżej ${G.AUTO_MAX_ACTIVE} treningi automatyczne naraz.`);
+    const plan = G.planAuto(p.skills[spec], p.training_progress[spec] || 0, p.energy, p.money, hours);
+    if (!plan.count) fail('Nie stać Cię nawet na jeden trening.');
+    spendEnergy(p, plan.energy);
+    p.money -= plan.money;
+    S.autos.push({ player_id: p.id, spec, started_at: now(), count: plan.count, done: 0, energy_total: plan.energy, money_total: plan.money });
+    return { message: `Trening automatyczny ruszył: ${plan.count} treningów „${G.SPECS[spec].name}”.` };
+  });
+  post('/auto/cancel', (b) => {
+    const p = me();
+    const spec = specOf(b);
+    const j = S.autos.find((x) => x.player_id === p.id && x.spec === spec);
+    if (!j) fail('Brak aktywnego treningu automatycznego.');
+    const left = j.count - j.done;
+    const energyBack = Math.floor((j.energy_total * left) / j.count);
+    const moneyBack = Math.floor((j.money_total * left) / j.count);
+    S.autos = S.autos.filter((x) => x !== j);
+    p.money += moneyBack;
+    p.energy = Math.min(G.ENERGY_MAX, p.energy + energyBack);
+    return { message: `Anulowano. Zwrot: ${moneyBack} monet i ${energyBack} energii.` };
   });
   post('/daily-bonus', () => {
     const p = me();
     if (now() < p.last_daily + G.DAILY_BONUS_MS) fail('Premię dzienną już odebrałeś.');
-    const amount = G.dailyBonusAmount(p.level);
+    const amount = G.dailyBonusAmount(p.ovr);
     p.money += amount;
     p.last_daily = now();
     return { message: `Odebrano premię: ${amount} monet.` };
@@ -342,7 +401,7 @@
     const p = me();
     const item = G.ITEMS_BY_ID[b.itemId];
     if (!item) fail('Nie ma takiego przedmiotu.');
-    if (p.level < item.level) fail(`Wymagany poziom ${item.level}.`);
+    if (p.ovr < item.ovr) fail(`Wymagany OVR ${item.ovr}.`);
     if (p.money < item.price) fail('Za mało monet.');
     if (S.inventory.some((i) => i.player_id === p.id && i.item_id === item.id)) fail('Masz już ten przedmiot.');
     p.money -= item.price;
@@ -358,7 +417,7 @@
   get('/opponents', () => {
     const p = me();
     const opponents = S.players
-      .filter((o) => o.id !== p.id && Math.abs(o.level - p.level) <= G.DUEL_LEVEL_RANGE)
+      .filter((o) => o.id !== p.id && G.inDuelRange(o.ovr, p.ovr))
       .sort((a, b) => b.last_seen - a.last_seen)
       .slice(0, 30)
       .map((o) => publicPlayer(player(o.id)));
@@ -368,10 +427,10 @@
     const p = me();
     const opp = player(Number(b.opponentId));
     if (!opp || opp.id === p.id) fail('Nieprawidłowy rywal.');
-    if (Math.abs(opp.level - p.level) > G.DUEL_LEVEL_RANGE) fail(`Rywal musi być w zasięgu ±${G.DUEL_LEVEL_RANGE} poziomów.`);
+    if (!G.inDuelRange(p.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
     spendEnergy(p, G.DUEL_ENERGY);
-    const { m, myRew, lvl } = duel(p, opp);
-    return { matchId: m.id, score: [m.home_score, m.away_score], reward: myRew, levelUp: lvl.levelsUp > 0 ? lvl.level : null };
+    const { m, myRew } = duel(p, opp);
+    return { matchId: m.id, score: [m.home_score, m.away_score], reward: myRew };
   });
   get('/matches/:id', (b, id) => {
     me();
@@ -385,7 +444,7 @@
   });
   get('/ranking/players', () => {
     me();
-    return { players: [...S.players].sort((a, b) => b.level - a.level || b.xp - a.xp).map((p) => publicPlayer(p)) };
+    return { players: [...S.players].sort((a, b) => b.ovr - a.ovr).map((p) => publicPlayer(p)) };
   });
   const clubRow = (c) => ({ id: c.id, name: c.name, tag: c.tag, points: c.points, wins: c.wins, draws: c.draws, losses: c.losses, members: members(c.id).length });
   get('/ranking/clubs', () => {
@@ -428,7 +487,7 @@
       applications: isOwner
         ? S.apps.filter((a) => a.club_id === c.id).map((a) => {
             const x = player(a.player_id);
-            return { id: x.id, name: x.name, level: x.level, position: x.position };
+            return { id: x.id, name: x.name, ovr: x.ovr, position: x.position };
           })
         : [],
       matches: S.matches.filter((m) => m.kind === 'club' && (m.home_id === c.id || m.away_id === c.id)).slice(-10).reverse().map(listMatch),
@@ -557,8 +616,8 @@
   });
   post('/preview/money', () => {
     const p = me();
-    p.money += 1000;
-    return { message: 'Dodano 1000 monet (tryb testowy).' };
+    p.money += 5000;
+    return { message: 'Dodano 5000 monet (tryb testowy).' };
   });
   post('/preview/reset', () => {
     S = seed();
