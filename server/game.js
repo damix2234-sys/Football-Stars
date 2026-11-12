@@ -356,7 +356,12 @@ export function effectiveStats(base, equippedItemIds) {
  */
 export const PENALTY_ENERGY = 25;
 export const PENALTY_KICKS = 5; // po 5 strzałów, potem seria do pierwszej różnicy w parze (bez remisów)
-export const PENALTY_SAFETY = 40; // zabezpieczenie przed nieskończoną serią
+export const PENALTY_SAFETY = 40;
+// Czas na decyzję w każdym ruchu; serwer dolicza zapas na animację i opóźnienie sieci.
+export const PENALTY_DECIDE_MS = 10000;
+export const PENALTY_GRACE_MS = 6000;
+// Ruch po czasie: strzał obok bramki albo bramkarz zostaje w środku.
+export const timeoutMove = (turn) => (turn === 'shoot' ? { x: 1.6, y: 0.4 } : { x: 0, y: 0.45 }); // zabezpieczenie przed nieskończoną serią
 
 export const shooterSkill = (s) => s.wykonczenie * 0.7 + s.wizja * 0.15 + s.szybkosc * 0.15;
 export const keeperSkill = (s) => s.refleks * 0.55 + s.chwytanie * 0.45;

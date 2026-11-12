@@ -486,15 +486,23 @@
     };
 
     const torso = () => {
-      // tułów: barki, klatka, talia (lekko węższa), biodra
+      // tułów prawie prostokątny: barki, klatka, lekko węższa talia, biodra.
+      // Punkty sortowane po stronie ekranu (postać przodem ma prawe ramię po lewej stronie ekranu).
+      const [sa, sb] = shL[0] <= shR[0] ? [shL, shR] : [shR, shL];
+      const halfSh = (sb[0] - sa[0]) / 2;
+      const midX = (sa[0] + sb[0]) / 2 - sc[0];
+      const hipHalf = Math.max(Math.abs(hipR[0] - hipL[0]) / 2 + w * 1.6, halfSh * 0.9);
+      const waistHalf = Math.max(hipHalf * 0.94, halfSh * 0.84);
+      const wy = lerp(sa[1], 0, 0.62);
+      const hx = midX * 0.3;
       g.beginPath();
-      g.moveTo(shL[0] - w * 0.9, shL[1] - w * 0.1);
-      g.quadraticCurveTo(sc[0], sc[1] - w * 1.7, shR[0] + w * 0.9, shR[1] - w * 0.1);
-      g.quadraticCurveTo(shR[0] + w * 0.75, lerp(shR[1], 0, 0.45), hipR[0] + w * 1.25, lerp(shR[1], 0, 0.7));
-      g.quadraticCurveTo(hipR[0] + w * 1.7, -w * 0.6, hipR[0] + w * 1.7, w * 0.2);
-      g.lineTo(hipL[0] - w * 1.7, w * 0.2);
-      g.quadraticCurveTo(hipL[0] - w * 1.7, -w * 0.6, hipL[0] - w * 1.25, lerp(shL[1], 0, 0.7));
-      g.quadraticCurveTo(shL[0] - w * 0.75, lerp(shL[1], 0, 0.45), shL[0] - w * 0.9, shL[1] - w * 0.1);
+      g.moveTo(sa[0] - w * 0.85, sa[1] - w * 0.05);
+      g.quadraticCurveTo(sc[0], sc[1] - w * 1.5, sb[0] + w * 0.85, sb[1] - w * 0.05);
+      g.quadraticCurveTo(sb[0] + w * 0.95, lerp(sb[1], wy, 0.5), hx + waistHalf, wy);
+      g.quadraticCurveTo(hx + hipHalf, lerp(wy, 0, 0.6), hx + hipHalf, w * 0.25);
+      g.lineTo(hx - hipHalf, w * 0.25);
+      g.quadraticCurveTo(hx - hipHalf, lerp(wy, 0, 0.6), hx - waistHalf, wy);
+      g.quadraticCurveTo(sa[0] - w * 0.95, lerp(sa[1], wy, 0.5), sa[0] - w * 0.85, sa[1] - w * 0.05);
       g.closePath();
       if (outline) return paint();
       const tg = g.createLinearGradient(shL[0] - w * 2, sc[1], shR[0] + w * 2, 0);
@@ -516,13 +524,14 @@
       const legEnd = (hip, knee) => [lerp(hip[0], knee[0], 0.4), lerp(hip[1], knee[1], 0.4)];
       const eL = legEnd(hipL, kneeL);
       const eR = legEnd(hipR, kneeR);
+      const [ha0, hb0] = hipL[0] <= hipR[0] ? [hipL, hipR] : [hipR, hipL];
       const waist = () => {
         g.beginPath();
-        g.moveTo(hipL[0] - w * 1.7, -w * 1.3);
-        g.lineTo(hipR[0] + w * 1.7, -w * 1.3);
-        g.quadraticCurveTo(hipR[0] + w * 1.85, w * 0.4, hipR[0] + w * 0.9, w * 1.0);
-        g.lineTo(hipL[0] - w * 0.9, w * 1.0);
-        g.quadraticCurveTo(hipL[0] - w * 1.85, w * 0.4, hipL[0] - w * 1.7, -w * 1.3);
+        g.moveTo(ha0[0] - w * 1.7, -w * 1.3);
+        g.lineTo(hb0[0] + w * 1.7, -w * 1.3);
+        g.quadraticCurveTo(hb0[0] + w * 1.85, w * 0.4, hb0[0] + w * 0.9, w * 1.0);
+        g.lineTo(ha0[0] - w * 0.9, w * 1.0);
+        g.quadraticCurveTo(ha0[0] - w * 1.85, w * 0.4, ha0[0] - w * 1.7, -w * 1.3);
         g.closePath();
       };
       if (outline) {
@@ -696,12 +705,12 @@
     } else {
       g.fillStyle = st.trim;
       g.beginPath();
-      g.moveTo(sc[0] - w * 1.15, sc[1] - w * 0.8);
-      g.lineTo(sc[0], sc[1] + w * 0.9);
-      g.lineTo(sc[0] + w * 1.15, sc[1] - w * 0.8);
-      g.lineTo(sc[0] + w * 0.65, sc[1] - w * 0.8);
-      g.lineTo(sc[0], sc[1] + w * 0.15);
-      g.lineTo(sc[0] - w * 0.65, sc[1] - w * 0.8);
+      g.moveTo(sc[0] - w * 0.8, sc[1] - w * 0.75);
+      g.lineTo(sc[0], sc[1] + w * 0.45);
+      g.lineTo(sc[0] + w * 0.8, sc[1] - w * 0.75);
+      g.lineTo(sc[0] + w * 0.5, sc[1] - w * 0.75);
+      g.lineTo(sc[0], sc[1] - w * 0.05);
+      g.lineTo(sc[0] - w * 0.5, sc[1] - w * 0.75);
       g.closePath();
       g.fill();
       g.save();
@@ -1178,6 +1187,57 @@
     const saveMap = (p) => CAM.save.p(p.x * GW, p.y * GH, 0);
     const saveUnmap = (sx, sy) => CAM.save.toGoal(sx, sy);
 
+    // Obszar bramki na ekranie w widoku strzału (rama, siatka i wnętrze) jako wielokąt wypukły.
+    const goalHull = (() => {
+      const pts = [];
+      for (const x of [-GW, GW]) for (const [y, z] of [[0, 0], [GH, 0], [2.2, -1.1], [0, -2.0]]) {
+        const q = CAM.shoot.p(x, y, z);
+        pts.push([q.x, q.y]);
+      }
+      pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+      const lo = [];
+      const hi = [];
+      for (const p of pts) {
+        while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop();
+        lo.push(p);
+      }
+      for (const p of pts.slice().reverse()) {
+        while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop();
+        hi.push(p);
+      }
+      return lo.slice(0, -1).concat(hi.slice(0, -1));
+    })();
+    // punkt w środku, gdy leży po tej samej stronie wszystkich krawędzi (niezależnie od kierunku obiegu)
+    const inHull = (x, y) => {
+      let pos = 0;
+      let neg = 0;
+      for (let i = 0; i < goalHull.length; i++) {
+        const a = goalHull[i];
+        const b = goalHull[(i + 1) % goalHull.length];
+        const c = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+        if (c > 0) pos++;
+        else if (c < 0) neg++;
+      }
+      if (pos === 0 || neg === 0) return true;
+      // margines 10 px wokół bramki (siatka z góry jest bardzo cienka)
+      for (let i = 0; i < goalHull.length; i++) {
+        const a = goalHull[i];
+        const b = goalHull[(i + 1) % goalHull.length];
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        const t = clamp(((x - a[0]) * (b[0] - a[0]) + (y - a[1]) * (b[1] - a[1])) / (L * L), 0, 1);
+        if (Math.hypot(x - (a[0] + (b[0] - a[0]) * t), y - (a[1] + (b[1] - a[1]) * t)) < 10) return true;
+      }
+      return false;
+    };
+    // Kliknięcie w strzale: w obszarze bramki = strzał celny (punkt w świetle bramki),
+    // poza nim = strzał obok lub nad bramką.
+    function shotTarget(sx, sy) {
+      const g0 = CAM.shoot.toGoal(sx, sy);
+      if (!inHull(sx, sy)) return g0;
+      return { x: clamp(g0.x, -0.95, 0.95), y: clamp(g0.y, 0.05, 0.95) };
+    }
+
     function resize() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth || 800;
@@ -1198,9 +1258,8 @@
       if (state.busy || !onPick) return;
       const p = toScene(e);
       state.aim = p;
-      const goal = state.view === 'shoot' ? CAM.shoot.toGoal(p.x, p.y) : saveUnmap(p.x, p.y);
-      if (state.view === 'save') state.marker = { x: p.x, y: p.y };
-      else state.marker = { x: p.x, y: p.y };
+      const goal = state.view === 'shoot' ? shotTarget(p.x, p.y) : saveUnmap(p.x, p.y);
+      state.marker = { x: p.x, y: p.y };
       const cb = onPick;
       onPick = null;
       cb({ x: +goal.x.toFixed(3), y: +goal.y.toFixed(3) });
@@ -1359,10 +1418,7 @@
       // celownik
       if (!state.busy && state.aim && onPick) {
         const { x, y } = state.aim;
-        const inGoal = (() => {
-          const gp = CAM.shoot.toGoal(x, y);
-          return Math.abs(gp.x) <= 1 && gp.y >= 0 && gp.y <= 1;
-        })();
+        const inGoal = inHull(x, y);
         const col = inGoal ? '#b6f23a' : '#ff9b3d';
         g.save();
         g.strokeStyle = col;
@@ -1615,6 +1671,11 @@
         state.marker = null;
         state.busy = false;
         onPick = cb;
+      },
+      // przerwanie oczekiwania na kliknięcie (koniec czasu)
+      cancel() {
+        onPick = null;
+        state.busy = true;
       },
       show(view) {
         state.view = view;

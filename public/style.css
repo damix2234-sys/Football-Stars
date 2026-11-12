@@ -460,3 +460,12 @@ a.tcat-main:hover { text-decoration: none; }
 .coin span + span { transform: rotateY(180deg); }
 @keyframes coin { from { transform: rotateY(0) translateY(0); } 50% { transform: rotateY(900deg) translateY(-30px); } to { transform: rotateY(1800deg) translateY(0); } }
 @media (max-width: 760px) { .pk-hint { top: 8px; bottom: auto; font-size: 11px; padding: 5px 10px; } }
+
+/* ---------- karne: odliczanie 10 s ---------- */
+.pk-timer { --p: 1; position: absolute; right: 12px; top: 12px; width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
+  background: conic-gradient(var(--accent) calc(var(--p) * 360deg), #ffffff22 0); box-shadow: 0 4px 16px #000a; pointer-events: none; }
+.pk-timer::before { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: #071009e6; }
+.pk-timer b { position: relative; font: 700 22px var(--font-display); font-variant-numeric: tabular-nums; }
+.pk-timer.urgent { background: conic-gradient(var(--danger) calc(var(--p) * 360deg), #ffffff22 0); animation: pulse .5s ease-in-out infinite alternate; }
+@keyframes pulse { to { transform: scale(1.08); } }
+@media (max-width: 760px) { .pk-timer { width: 42px; height: 42px; top: auto; bottom: 10px; right: 10px; } .pk-timer b { font-size: 17px; } }

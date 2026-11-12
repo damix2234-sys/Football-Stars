@@ -166,6 +166,17 @@ test('pełny przebieg: rejestracja, trening, pojedynek karnych, klub', async () 
     assert.ok(res.data.status.finished, 'seria musi się zakończyć');
     assert.ok(res.data.reward.money > 0);
     assert.equal((await a(`/penalty/${duelId}/kick`, { x: 0, y: 0.5 })).status, 400); // po końcu
+    // limit czasu: spóźniony strzał leci obok bramki
+    const s2 = (await a('/penalty/start', { opponentId: bId })).data.duel;
+    if (s2.status.turn === 'save') await a(`/penalty/${s2.id}/kick`, { x: 0, y: 0.5 });
+    clock.t += G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS + 1000;
+    const lateKick = await a(`/penalty/${s2.id}/kick`, { x: 0, y: 0.5 });
+    assert.equal(lateKick.data.kick.side, 'my');
+    assert.equal(lateKick.data.kick.result, 'miss');
+    let guard2 = 0;
+    let rr;
+    do rr = await a(`/penalty/${s2.id}/kick`, { x: 0.5, y: 0.5 });
+    while (rr.status === 200 && !rr.data.status.finished && ++guard2 < 40);
     const match = await a('/matches/' + res.data.reward.matchId);
     assert.ok(match.data.match.penalty && match.data.match.events.length >= 6);
     assert.equal((await a('/penalty/current')).data.duel, null);

@@ -752,6 +752,7 @@ async function penaltyGame() {
       <div class="pk-stage">
         <canvas id="pk-canvas" aria-label="Rzuty karne"></canvas>
         <div class="pk-hint" id="pk-hint"></div>
+        <div class="pk-timer" id="pk-timer" hidden><b>10</b></div>
       </div>
       <div class="pk-toss" id="pk-toss" hidden></div>
       <div class="pk-end" id="pk-end" hidden></div>
@@ -772,6 +773,35 @@ async function penaltyGame() {
     $('#pk-sd').hidden = !status.suddenDeath;
   };
   const hint = (html) => ($('#pk-hint').innerHTML = html);
+  // 10 sekund na decyzję: napastnik bez kliknięcia strzela obok bramki, bramkarz zostaje w środku.
+  const DECIDE_MS = 10000;
+  let decideTimer = null;
+  const stopTimer = () => {
+    clearInterval(decideTimer);
+    decideTimer = null;
+    $('#pk-timer').hidden = true;
+  };
+  const startTimer = (turn) => {
+    stopTimer();
+    const end = Date.now() + DECIDE_MS;
+    const el = $('#pk-timer');
+    el.hidden = false;
+    const tick = () => {
+      if (!document.body.contains(el)) return stopTimer();
+      const left = Math.max(0, end - Date.now());
+      el.style.setProperty('--p', left / DECIDE_MS);
+      el.querySelector('b').textContent = Math.ceil(left / 1000);
+      el.classList.toggle('urgent', left < 3500);
+      if (left <= 0) {
+        stopTimer();
+        scene.cancel();
+        toast(turn === 'shoot' ? 'Koniec czasu! Strzał poszedł obok bramki.' : 'Koniec czasu! Bramkarz został w środku.', true);
+        kick(turn === 'shoot' ? { x: 1.6, y: 0.4, timeout: true } : { x: 0, y: 0.45, timeout: true });
+      }
+    };
+    tick();
+    decideTimer = setInterval(tick, 100);
+  };
   const next = (status) => {
     paint(status);
     if (status.finished) return;
@@ -782,8 +812,10 @@ async function penaltyGame() {
       hint(`<b>Bronisz.</b> Stuknij w bramkę tam, gdzie rzuci się Twój bramkarz.`);
       scene.wait('save', kick);
     }
+    startTimer(status.turn);
   };
   async function kick(target) {
+    stopTimer();
     hint('');
     let r;
     try {

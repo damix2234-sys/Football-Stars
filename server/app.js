@@ -634,7 +634,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
         me.id,
         opp.id,
         crypto.randomInt(2 ** 31),
-        JSON.stringify({ my: [], op: [], kicks: [], first: crypto.randomInt(2) ? 'my' : 'op' }),
+        JSON.stringify({ my: [], op: [], kicks: [], first: crypto.randomInt(2) ? 'my' : 'op', turnAt: now() }),
         now(),
       );
       return { duel: await penaltyView(r.rows[0]) };
@@ -659,7 +659,9 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const myStats = await effStats(me);
       const oppStats = await effStats(opp);
       const rand = G.rng(Number(row.seed) + st.kicks.length * 7919);
-      const target = clampKick(req.body);
+      // po czasie na decyzję ruch przepada (strzał obok / bramkarz w środku)
+      const late = st.turnAt && now() > st.turnAt + G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS;
+      const target = late || req.body.timeout ? G.timeoutMove(status.turn) : clampKick(req.body);
       let kick;
       if (status.turn === 'shoot') {
         const ball = { ...target }; // strzał gracza leci dokładnie tam, gdzie wskazał
@@ -673,6 +675,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
         st.op.push(kick.result);
       }
       st.kicks.push(kick);
+      st.turnAt = now();
       const after = G.penaltyStatus(st);
       let reward = null;
       if (after.finished) {

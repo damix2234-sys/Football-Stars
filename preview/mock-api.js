@@ -163,6 +163,7 @@
       st.op.push(kick.result);
     }
     st.kicks.push(kick);
+    st.turnAt = now();
     return kick;
   }
   function finishPenalty(st, me, opp, t = now()) {
@@ -481,7 +482,7 @@
     if (!opp || opp.id === p.id) fail('Nieprawidłowy rywal.');
     if (!G.inDuelRange(p.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
     spendEnergy(p, G.PENALTY_ENERGY);
-    const d = { id: nextId('penalty'), player_id: p.id, opponent_id: opp.id, seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [], first: Math.random() < 0.5 ? 'my' : 'op', finished: false };
+    const d = { id: nextId('penalty'), player_id: p.id, opponent_id: opp.id, seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [], first: Math.random() < 0.5 ? 'my' : 'op', turnAt: now(), finished: false };
     S.penalties.push(d);
     return { duel: penaltyView(d) };
   });
@@ -490,7 +491,8 @@
     const d = S.penalties.find((x) => x.id === id && x.player_id === p.id && !x.finished);
     if (!d) fail('Ten pojedynek już się zakończył.');
     const opp = player(d.opponent_id);
-    const input = { x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)), y: Math.max(-0.3, Math.min(1.4, Number(b.y) || 0)) };
+    const late = d.turnAt && now() > d.turnAt + G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS;
+    const input = late || b.timeout ? G.timeoutMove(G.penaltyStatus(d).turn) : { x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)), y: Math.max(-0.3, Math.min(1.4, Number(b.y) || 0)) };
     const kick = penaltyKick(d, p, opp, input);
     const status = G.penaltyStatus(d);
     let reward = null;
