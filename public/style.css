@@ -459,3 +459,4 @@ a.tcat-main:hover { text-decoration: none; }
   box-shadow: inset 0 0 0 4px #b8860b, 0 0 30px #ffd23f88; }
 .coin span + span { transform: rotateY(180deg); }
 @keyframes coin { from { transform: rotateY(0) translateY(0); } 50% { transform: rotateY(900deg) translateY(-30px); } to { transform: rotateY(1800deg) translateY(0); } }
+@media (max-width: 760px) { .pk-hint { top: 8px; bottom: auto; font-size: 11px; padding: 5px 10px; } }

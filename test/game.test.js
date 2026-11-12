@@ -45,6 +45,10 @@ test('karne: lepszy strzelec trafia częściej, seria kończy się poprawnie', (
   assert.equal(G.penaltyStatus({ my: [...Array(5).fill('goal'), 'save'], op: [...Array(5).fill('goal'), 'goal'] }).result, 'loss');
   assert.equal(G.penaltyStatus({ first: 'op', my: [], op: [] }).turn, 'save'); // rywal zaczyna
   assert.equal(G.resolveKick({ x: 1.03, y: 0.5 }, { x: 0, y: 0.5 }, 20), 'post');
+  // mocniejszy strzał trudniej obronić: ten sam punkt, ten sam bramkarz
+  const edge = { x: 0.42, y: 0.5 };
+  assert.equal(G.resolveKick(edge, { x: 0, y: 0.5 }, 20, 0), 'save');
+  assert.equal(G.resolveKick(edge, { x: 0, y: 0.5 }, 20, 300), 'goal');
   assert.equal(G.penaltyStatus({ my: Array(5).fill('goal'), op: Array(4).fill('goal') }).turn, 'save');
 });
 

@@ -662,14 +662,14 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const target = clampKick(req.body);
       let kick;
       if (status.turn === 'shoot') {
-        const ball = G.ballLanding(target, G.shooterSkill(myStats), rand);
+        const ball = { ...target }; // strzał gracza leci dokładnie tam, gdzie wskazał
         const dive = G.aiDive(rand);
-        kick = { side: 'my', target, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(oppStats)) };
+        kick = { side: 'my', target, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(oppStats), G.shooterSkill(myStats)) };
         st.my.push(kick.result);
       } else {
         const aim = G.aiAim(rand);
         const ball = G.ballLanding(aim, G.shooterSkill(oppStats), rand);
-        kick = { side: 'op', target: aim, ball, dive: target, result: G.resolveKick(ball, target, G.keeperSkill(myStats)) };
+        kick = { side: 'op', target: aim, ball, dive: target, result: G.resolveKick(ball, target, G.keeperSkill(myStats), G.shooterSkill(oppStats)) };
         st.op.push(kick.result);
       }
       st.kicks.push(kick);

@@ -150,15 +150,16 @@
     let kick;
     if (status.turn === 'shoot') {
       const target = input || G.aiAim(rand);
-      const ball = G.ballLanding(target, G.shooterSkill(effStats(me)), rand);
+      // strzał gracza leci dokładnie w wybrany punkt; w serii AI (input = null) cel ma rozrzut
+      const ball = input ? { ...target } : G.ballLanding(target, G.shooterSkill(effStats(me)), rand);
       const dive = G.aiDive(rand);
-      kick = { side: 'my', target, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(effStats(opp))) };
+      kick = { side: 'my', target, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(effStats(opp)), G.shooterSkill(effStats(me))) };
       st.my.push(kick.result);
     } else {
       const aim = G.aiAim(rand);
       const ball = G.ballLanding(aim, G.shooterSkill(effStats(opp)), rand);
       const dive = input || G.aiDive(rand);
-      kick = { side: 'op', target: aim, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(effStats(me))) };
+      kick = { side: 'op', target: aim, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(effStats(me)), G.shooterSkill(effStats(opp))) };
       st.op.push(kick.result);
     }
     st.kicks.push(kick);

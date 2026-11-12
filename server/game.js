@@ -366,22 +366,28 @@ function gauss(rand) {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
 }
 
-// Gdzie faktycznie poleci piłka: im lepsze wykończenie, tym mniejszy rozrzut.
+// Strzał AI: gdzie faktycznie poleci piłka (im lepsze wykończenie, tym mniejszy rozrzut).
+// Strzał gracza leci dokładnie w wybrany punkt.
 export function ballLanding(target, shooter, rand) {
   const acc = shooter / (shooter + 30);
   const spread = 0.05 + 0.3 * (1 - acc);
   return { x: target.x + gauss(rand) * spread, y: target.y + gauss(rand) * spread * 0.8 };
 }
 
-// Zasięg bramkarza: lepszy bramkarz sięga dalej; strzały w okienko są trudniejsze.
-export function keeperReach(keeper, ball) {
+// Zasięg bramkarza: lepszy bramkarz sięga dalej, mocniejszy strzał (lepszy strzelec) skraca
+// jego zasięg, a strzały w okienko są najtrudniejsze do obrony.
+export function shotPower(shooter) {
+  return shooter / (shooter + 60);
+}
+export function keeperReach(keeper, ball, shooter = 0) {
   const base = 0.3 + 0.32 * (keeper / (keeper + 40));
+  const power = 1.12 - 0.4 * shotPower(shooter);
   const corner = Math.abs(ball.x) > 0.75 && ball.y > 0.65 ? 0.75 : 1;
-  return base * corner;
+  return base * power * corner;
 }
 
 // Rozstrzyga jeden strzał: "post" = słupek lub poprzeczka, "miss" = obok lub nad bramką.
-export function resolveKick(ball, dive, keeper) {
+export function resolveKick(ball, dive, keeper, shooter = 0) {
   const out = Math.abs(ball.x) > 1 || ball.y > 1 || ball.y < 0;
   if (out) {
     const nearPost = Math.abs(Math.abs(ball.x) - 1) < 0.06 && ball.y >= -0.02 && ball.y <= 1.04;
@@ -389,7 +395,7 @@ export function resolveKick(ball, dive, keeper) {
     return nearPost || nearBar ? 'post' : 'miss';
   }
   const d = Math.hypot(ball.x - dive.x, (ball.y - dive.y) * 0.8);
-  return d <= keeperReach(keeper, ball) ? 'save' : 'goal';
+  return d <= keeperReach(keeper, ball, shooter) ? 'save' : 'goal';
 }
 
 // Bramkarz AI wybiera, gdzie się rzucić (nie zna celu strzelca).
