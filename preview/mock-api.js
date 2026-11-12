@@ -141,6 +141,7 @@
     goal: (who) => `${who} strzela i jest GOL!`,
     save: (who) => `${who} strzela, ale bramkarz broni.`,
     miss: (who) => `${who} strzela obok bramki.`,
+    post: (who) => `${who} trafia w słupek!`,
   };
   // Jeden strzał w serii: gdy "my" strzelamy, cel podaje gracz; gdy bronimy, podaje miejsce rzutu.
   function penaltyKick(st, me, opp, input) {
@@ -182,7 +183,7 @@
   }
   // Pojedynek rozgrywany w całości przez AI (boty między sobą lub bot wyzywa gracza).
   function autoPenalty(me, opp, t = now()) {
-    const st = { seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [] };
+    const st = { seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [], first: Math.random() < 0.5 ? 'my' : 'op' };
     while (!G.penaltyStatus(st).finished) penaltyKick(st, me, opp, null);
     return finishPenalty(st, me, opp, t);
   }
@@ -384,7 +385,11 @@
   post('/auto/plan', (b) => {
     const p = me();
     const spec = specOf(b);
-    return G.planAuto(p.skills[spec], p.training_progress[spec] || 0, p.energy, p.money, hoursOf(b));
+    return {
+      money: p.money,
+      energy: p.energy,
+      options: G.AUTO_OPTIONS.map((h) => G.planAuto(p.skills[spec], p.training_progress[spec] || 0, p.energy, p.money, h)),
+    };
   });
   post('/auto/start', (b) => {
     const p = me();
@@ -394,7 +399,10 @@
     if (S.autos.filter((j) => j.player_id === p.id).length >= G.AUTO_MAX_ACTIVE)
       fail(`Możesz mieć najwyżej ${G.AUTO_MAX_ACTIVE} treningi automatyczne naraz.`);
     const plan = G.planAuto(p.skills[spec], p.training_progress[spec] || 0, p.energy, p.money, hours);
-    if (!plan.count) fail('Nie stać Cię nawet na jeden trening.');
+    if (plan.missingMoney > 0 && plan.missingEnergy > 0)
+      fail(`Za mało monet i energii. Brakuje ${plan.missingMoney} monet i ${plan.missingEnergy} energii.`);
+    if (plan.missingMoney > 0) fail(`Za mało monet. Potrzebujesz ${plan.money}, masz ${p.money}.`);
+    if (plan.missingEnergy > 0) fail(`Za mało energii. Potrzebujesz ${plan.energy}, masz ${p.energy}.`);
     spendEnergy(p, plan.energy);
     p.money -= plan.money;
     S.autos.push({ player_id: p.id, spec, started_at: now(), count: plan.count, done: 0, energy_total: plan.energy, money_total: plan.money });
@@ -457,7 +465,7 @@
   });
   const penaltyView = (d) => {
     const o = player(d.opponent_id);
-    return { id: d.id, opponent: { id: o.id, name: o.name, position: o.position, ovr: o.ovr }, my: d.my, op: d.op, kicks: d.kicks, status: G.penaltyStatus(d) };
+    return { id: d.id, opponent: { id: o.id, name: o.name, position: o.position, ovr: o.ovr }, my: d.my, op: d.op, kicks: d.kicks, first: d.first, status: G.penaltyStatus(d) };
   };
   get('/penalty/current', () => {
     const p = me();
@@ -472,7 +480,7 @@
     if (!opp || opp.id === p.id) fail('Nieprawidłowy rywal.');
     if (!G.inDuelRange(p.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
     spendEnergy(p, G.PENALTY_ENERGY);
-    const d = { id: nextId('penalty'), player_id: p.id, opponent_id: opp.id, seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [], finished: false };
+    const d = { id: nextId('penalty'), player_id: p.id, opponent_id: opp.id, seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [], first: Math.random() < 0.5 ? 'my' : 'op', finished: false };
     S.penalties.push(d);
     return { duel: penaltyView(d) };
   });

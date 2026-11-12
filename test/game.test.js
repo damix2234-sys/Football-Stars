@@ -15,12 +15,12 @@ test('trening podnosi poziom specjalizacji, a plan automatu pilnuje budżetu', (
   const need = G.trainingsNeeded(10);
   assert.deepEqual(G.applyTrainings(10, 0, need), { level: 11, progress: 0, gained: 1 });
   assert.equal(G.applyTrainings(10, 0, need - 1).level, 10);
-  // brak pieniędzy = zero treningów
-  assert.equal(G.planAuto(10, 0, 500, 0, 1).count, 0);
-  // budżet nigdy nie jest przekroczony, a czas ogranicza liczbę treningów
-  const p = G.planAuto(10, 0, 300, 5000, 1);
-  assert.ok(p.energy <= 300 && p.money <= 5000);
-  assert.ok(G.planAuto(1, 0, 1e9, 1e9, 0.25).count <= (0.25 * 3600) / 5);
+  // czas zawsze daje pełną liczbę treningów; brak środków = plan oznaczony jako niedostępny
+  const p = G.planAuto(10, 0, 500, 0, 1);
+  assert.equal(p.count, 720);
+  assert.equal(p.affordable, false);
+  assert.equal(p.missingMoney, p.money);
+  assert.ok(G.planAuto(10, 0, 1e9, 1e9, 1).affordable);
   // OVR = suma specjalizacji, kategoria = suma jej dwóch specjalizacji
   const s = G.startingSkills('NAP');
   assert.equal(G.ovr(s), G.SPEC_KEYS.reduce((a, k) => a + s[k], 0));
@@ -41,7 +41,10 @@ test('karne: lepszy strzelec trafia częściej, seria kończy się poprawnie', (
   assert.equal(G.resolveKick({ x: 1.2, y: 0.5 }, { x: 0, y: 0.5 }, 20), 'miss');
   assert.equal(G.resolveKick({ x: 0, y: 0.5 }, { x: 0, y: 0.5 }, 20), 'save');
   assert.deepEqual(G.penaltyStatus({ my: ['goal', 'goal', 'goal'], op: ['save', 'save', 'save'] }).result, 'win');
-  assert.equal(G.penaltyStatus({ my: Array(5).fill('goal'), op: Array(5).fill('goal') }).finished, false); // dogrywka
+  assert.equal(G.penaltyStatus({ my: Array(5).fill('goal'), op: Array(5).fill('goal') }).finished, false); // seria trwa dalej
+  assert.equal(G.penaltyStatus({ my: [...Array(5).fill('goal'), 'save'], op: [...Array(5).fill('goal'), 'goal'] }).result, 'loss');
+  assert.equal(G.penaltyStatus({ first: 'op', my: [], op: [] }).turn, 'save'); // rywal zaczyna
+  assert.equal(G.resolveKick({ x: 1.03, y: 0.5 }, { x: 0, y: 0.5 }, 20), 'post');
   assert.equal(G.penaltyStatus({ my: Array(5).fill('goal'), op: Array(4).fill('goal') }).turn, 'save');
 });
 
@@ -116,10 +119,18 @@ test('pełny przebieg: rejestracja, trening, pojedynek karnych, klub', async () 
     assert.equal((await a('/train', { spec: 'wykonczenie' })).status, 200);
 
     // trening automatyczny: plan, start, postęp w czasie, anulowanie ze zwrotem
-    const plan = (await a('/auto/plan', { spec: 'drybling', hours: 0.25 })).data;
-    assert.ok(plan.count > 0, JSON.stringify(plan));
+    const plans = (await a('/auto/plan', { spec: 'drybling' })).data;
+    assert.equal(plans.options.length, G.AUTO_OPTIONS.length);
+    const plan = plans.options[0]; // 5 minut
+    assert.equal(plan.count, 60);
+    assert.ok(plan.affordable, JSON.stringify(plan));
+    const big = plans.options.at(-1); // 8 godzin: za drogo dla nowego gracza
+    assert.equal(big.affordable, false);
+    const refused = await a('/auto/start', { spec: 'drybling', hours: big.hours });
+    assert.equal(refused.status, 400);
+    assert.match(refused.data.error, /Za mało/);
     const before = (await a('/me')).data.player;
-    assert.equal((await a('/auto/start', { spec: 'drybling', hours: 0.25 })).status, 200);
+    assert.equal((await a('/auto/start', { spec: 'drybling', hours: plan.hours })).status, 200);
     const started = (await a('/me')).data.player;
     assert.equal(started.money, before.money - plan.money);
     assert.equal((await a('/train', { spec: 'drybling' })).status, 400); // trenuje automatycznie
@@ -138,7 +149,7 @@ test('pełny przebieg: rejestracja, trening, pojedynek karnych, klub', async () 
     const start = await a('/penalty/start', { opponentId: bId });
     assert.equal(start.status, 200, JSON.stringify(start.data));
     const duelId = start.data.duel.id;
-    assert.equal(start.data.duel.status.turn, 'shoot');
+    assert.ok(['my', 'op'].includes(start.data.duel.first)); // losowanie, kto zaczyna
     // ponowny start zwraca ten sam, niedokończony pojedynek
     assert.equal((await a('/penalty/start', { opponentId: bId })).data.duel.id, duelId);
     let res;
@@ -146,7 +157,7 @@ test('pełny przebieg: rejestracja, trening, pojedynek karnych, klub', async () 
     do {
       res = await a(`/penalty/${duelId}/kick`, { x: guard % 2 ? -0.7 : 0.7, y: 0.4 });
       assert.equal(res.status, 200, JSON.stringify(res.data));
-      assert.ok(['goal', 'save', 'miss'].includes(res.data.kick.result));
+      assert.ok(['goal', 'save', 'miss', 'post'].includes(res.data.kick.result));
     } while (!res.data.status.finished && ++guard < 40);
     assert.ok(res.data.status.finished, 'seria musi się zakończyć');
     assert.ok(res.data.reward.money > 0);

@@ -423,15 +423,20 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     return h;
   };
 
-  // Podgląd treningu automatycznego (nic nie zmienia).
+  // Podgląd treningu automatycznego dla wszystkich czasów (nic nie zmienia).
   app.post(
     '/api/auto/plan',
     needPlayer,
     route(async (req) => {
       const spec = specOf(req);
       const p = await loadPlayer(req.playerId);
-      const skills = skillsOf(p);
-      return G.planAuto(skills[spec], progressOf(p)[spec] || 0, p.energy, p.money, hoursOf(req));
+      const level = skillsOf(p)[spec];
+      const prog = progressOf(p)[spec] || 0;
+      return {
+        money: p.money,
+        energy: p.energy,
+        options: G.AUTO_OPTIONS.map((h) => G.planAuto(level, prog, p.energy, p.money, h)),
+      };
     }),
   );
 
@@ -448,7 +453,10 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       if (active >= G.AUTO_MAX_ACTIVE) fail(`Możesz mieć najwyżej ${G.AUTO_MAX_ACTIVE} treningi automatyczne naraz.`);
       const skills = skillsOf(p);
       const plan = G.planAuto(skills[spec], progressOf(p)[spec] || 0, p.energy, p.money, hours);
-      if (!plan.count) fail('Nie stać Cię nawet na jeden trening.');
+      if (plan.missingMoney > 0 && plan.missingEnergy > 0)
+        fail(`Za mało monet i energii. Brakuje ${plan.missingMoney} monet i ${plan.missingEnergy} energii.`);
+      if (plan.missingMoney > 0) fail(`Za mało monet. Potrzebujesz ${plan.money}, masz ${p.money}.`);
+      if (plan.missingEnergy > 0) fail(`Za mało energii. Potrzebujesz ${plan.energy}, masz ${p.energy}.`);
       await spendEnergy(p, plan.energy);
       await db.run('UPDATE players SET money = money - ? WHERE id = ?', plan.money, p.id);
       await db.run(
@@ -586,6 +594,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     goal: (who) => `${who} strzela i jest GOL!`,
     save: (who) => `${who} strzela, ale bramkarz broni.`,
     miss: (who) => `${who} strzela obok bramki.`,
+    post: (who) => `${who} trafia w słupek!`,
   };
   const clampKick = (b) => ({
     x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)),
@@ -595,7 +604,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   async function penaltyView(row) {
     const st = JSON.parse(row.state);
     const opp = await db.get('SELECT id, name, position, ovr FROM players WHERE id = ?', row.opponent_id);
-    return { id: row.id, opponent: opp, my: st.my, op: st.op, kicks: st.kicks, status: G.penaltyStatus(st) };
+    return { id: row.id, opponent: opp, my: st.my, op: st.op, kicks: st.kicks, first: st.first || 'my', status: G.penaltyStatus(st) };
   }
 
   app.get(
@@ -625,7 +634,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
         me.id,
         opp.id,
         crypto.randomInt(2 ** 31),
-        JSON.stringify({ my: [], op: [], kicks: [] }),
+        JSON.stringify({ my: [], op: [], kicks: [], first: crypto.randomInt(2) ? 'my' : 'op' }),
         now(),
       );
       return { duel: await penaltyView(r.rows[0]) };

@@ -429,3 +429,33 @@ a.tcat-main:hover { text-decoration: none; }
   .pk-hint { font-size: 12px; white-space: normal; text-align: center; width: max-content; }
 }
 .me-chip { margin-right: auto; }
+
+/* ---------- tabela treningu automatycznego ---------- */
+.auto-have { font-size: 14px; }
+.auto-table { display: grid; gap: 4px; }
+.at-row { display: grid; grid-template-columns: 1fr 1fr 0.8fr 1.1fr 1fr; gap: 6px; align-items: center; width: 100%; text-align: left;
+  padding: 8px 10px; border-radius: 10px; background: #000a; border: 1px solid var(--line); color: var(--text); font: 500 13px var(--font-body);
+  font-variant-numeric: tabular-nums; }
+.at-row.at-head { background: none; border: 0; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-block: 0; }
+.at-row.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c), 0 0 16px color-mix(in srgb, var(--c) 30%, transparent); }
+.at-row.no { opacity: .75; }
+.at-row .lack { color: var(--danger); font-weight: 600; }
+.ok-text { color: #3ee07a; }
+.auto-detail p { margin: 0 0 4px; }
+@media (max-width: 760px) { .at-row { font-size: 12px; padding: 7px 8px; gap: 4px; } }
+
+/* ---------- karne: losowanie i seria dodatkowa ---------- */
+.pk-score { position: relative; }
+.pk-score small { position: absolute; left: 50%; bottom: -14px; transform: translateX(-50%); white-space: nowrap; font: 700 10px var(--font-display);
+  letter-spacing: .1em; text-transform: uppercase; color: #ffd23f; }
+.pk-stage { position: relative; }
+.pk-toss { position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 14px; text-align: center;
+  background: radial-gradient(circle, #000a, #000e); border-radius: 16px; }
+.pk { position: relative; }
+.pk-toss p { margin: 0; font-size: 17px; }
+.coin { position: relative; width: 84px; height: 84px; transform-style: preserve-3d; animation: coin 1.3s cubic-bezier(.3,.7,.4,1) forwards; }
+.coin span { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; backface-visibility: hidden;
+  font: 700 26px var(--font-display); color: #14200a; background: radial-gradient(circle at 35% 30%, #fff6b0, #ffd23f 55%, #b8860b);
+  box-shadow: inset 0 0 0 4px #b8860b, 0 0 30px #ffd23f88; }
+.coin span + span { transform: rotateY(180deg); }
+@keyframes coin { from { transform: rotateY(0) translateY(0); } 50% { transform: rotateY(900deg) translateY(-30px); } to { transform: rotateY(1800deg) translateY(0); } }

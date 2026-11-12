@@ -148,21 +148,26 @@ export function applyTrainings(level, progress, n) {
 }
 
 /**
- * Plan treningu automatycznego: ile treningów zmieści się w podanym czasie
- * i na ile wystarczy obecnej energii oraz monet (koszt rośnie z poziomem).
+ * Plan treningu automatycznego: wybrany czas zawsze oznacza pełną liczbę treningów
+ * (jeden co 5 s). Liczymy dokładny koszt i efekt; jeśli gracza nie stać, nie może zacząć.
  */
+export const AUTO_OPTIONS = [1 / 12, 0.25, 0.5, 1, 2, 4, 8];
 export function planAuto(level, progress, energy, money, hours) {
-  const slots = Math.floor((Math.min(AUTO_MAX_HOURS, Math.max(0, hours)) * 3600 * 1000) / TRAIN_COOLDOWN_MS);
-  let lvl = level, prog = progress, count = 0, e = 0, m = 0, limit = 'time';
-  while (count < slots) {
+  const count = Math.floor((Math.min(AUTO_MAX_HOURS, Math.max(0, hours)) * 3600 * 1000) / TRAIN_COOLDOWN_MS);
+  let lvl = level, prog = progress, e = 0, m = 0;
+  for (let i = 0; i < count; i++) {
     const c = trainCost(lvl);
-    if (e + c.energy > energy) { limit = 'energy'; break; }
-    if (m + c.money > money) { limit = 'money'; break; }
-    e += c.energy; m += c.money; count++;
+    e += c.energy;
+    m += c.money;
     const r = applyTrainings(lvl, prog, 1);
-    lvl = r.level; prog = r.progress;
+    lvl = r.level;
+    prog = r.progress;
   }
-  return { count, energy: e, money: m, levels: lvl - level, durationMs: count * TRAIN_COOLDOWN_MS, slots, limit };
+  return {
+    hours, count, energy: e, money: m, levels: lvl - level, durationMs: count * TRAIN_COOLDOWN_MS,
+    missingMoney: Math.max(0, m - money), missingEnergy: Math.max(0, e - energy),
+    affordable: m <= money && e <= energy,
+  };
 }
 
 // Energia liczona leniwie na podstawie znacznika czasu (bez górnego limitu).
@@ -350,8 +355,8 @@ export function effectiveStats(base, equippedItemIds) {
  * y od 0 (murawa) do 1 (poprzeczka). Wynik każdego strzału liczy serwer.
  */
 export const PENALTY_ENERGY = 25;
-export const PENALTY_KICKS = 5; // po 5 strzałów, potem nagła śmierć (maks. 10 par)
-export const PENALTY_MAX_KICKS = 10;
+export const PENALTY_KICKS = 5; // po 5 strzałów, potem seria do pierwszej różnicy w parze (bez remisów)
+export const PENALTY_SAFETY = 40; // zabezpieczenie przed nieskończoną serią
 
 export const shooterSkill = (s) => s.wykonczenie * 0.7 + s.wizja * 0.15 + s.szybkosc * 0.15;
 export const keeperSkill = (s) => s.refleks * 0.55 + s.chwytanie * 0.45;
@@ -375,9 +380,14 @@ export function keeperReach(keeper, ball) {
   return base * corner;
 }
 
-// Rozstrzyga jeden strzał.
+// Rozstrzyga jeden strzał: "post" = słupek lub poprzeczka, "miss" = obok lub nad bramką.
 export function resolveKick(ball, dive, keeper) {
-  if (Math.abs(ball.x) > 1 || ball.y > 1 || ball.y < 0) return 'miss';
+  const out = Math.abs(ball.x) > 1 || ball.y > 1 || ball.y < 0;
+  if (out) {
+    const nearPost = Math.abs(Math.abs(ball.x) - 1) < 0.06 && ball.y >= -0.02 && ball.y <= 1.04;
+    const nearBar = Math.abs(ball.y - 1) < 0.06 && Math.abs(ball.x) <= 1.04;
+    return nearPost || nearBar ? 'post' : 'miss';
+  }
   const d = Math.hypot(ball.x - dive.x, (ball.y - dive.y) * 0.8);
   return d <= keeperReach(keeper, ball) ? 'save' : 'goal';
 }
@@ -396,8 +406,11 @@ export function aiAim(rand) {
   return { x, y: 0.1 + rand() * 0.75 };
 }
 
-// Stan serii: wynik, czy koniec i kto teraz (my strzelamy pierwsi).
+// Stan serii według prawdziwych zasad: strzały na przemian (zaczyna ten, kto wygrał losowanie),
+// po 5 strzałów; seria kończy się wcześniej, gdy jedna strona nie może już dogonić drugiej;
+// przy remisie po 5 grają dalej parami, aż w tej samej parze jeden trafi, a drugi nie.
 export function penaltyStatus(st) {
+  const first = st.first || 'my';
   const me = st.my.filter((k) => k === 'goal').length;
   const op = st.op.filter((k) => k === 'goal').length;
   let finished = false;
@@ -405,11 +418,17 @@ export function penaltyStatus(st) {
     const myLeft = PENALTY_KICKS - st.my.length;
     const opLeft = PENALTY_KICKS - st.op.length;
     if (me + myLeft < op || op + opLeft < me) finished = true;
-  } else if (st.my.length === st.op.length && me !== op) {
-    finished = true; // nagła śmierć: para strzałów rozstrzyga
-  }
+  } else if (st.my.length === st.op.length && me !== op) finished = true;
   if (st.my.length === PENALTY_KICKS && st.op.length === PENALTY_KICKS && me !== op) finished = true;
-  if (st.my.length >= PENALTY_MAX_KICKS && st.my.length === st.op.length) finished = true;
-  const turn = finished ? null : st.my.length === st.op.length ? 'shoot' : 'save';
-  return { me, op, finished, turn, result: finished ? (me > op ? 'win' : me < op ? 'loss' : 'draw') : null };
+  if (st.my.length >= PENALTY_SAFETY && st.my.length === st.op.length) finished = true;
+  let turn = null;
+  if (!finished) {
+    const even = st.my.length === st.op.length;
+    turn = first === 'my' ? (even ? 'shoot' : 'save') : even ? 'save' : 'shoot';
+  }
+  return {
+    me, op, finished, turn, first,
+    suddenDeath: Math.min(st.my.length, st.op.length) >= PENALTY_KICKS,
+    result: finished ? (me > op ? 'win' : me < op ? 'loss' : 'draw') : null,
+  };
 }

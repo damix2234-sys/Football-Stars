@@ -615,21 +615,22 @@ async function viewTraining(catId) {
   });
 }
 
-// Panel treningu automatycznego: wybór czasu i dokładne wyliczenie kosztów oraz efektu.
+// Panel treningu automatycznego: dokładnie, co daje każdy czas (pełna liczba treningów).
 function autoPanel(spec) {
   const s = CFG.categories.flatMap((c) => c.specs.map((x) => ({ ...x, color: c.color }))).find((x) => x.id === spec);
   const st = ME.player.training.specs[spec];
-  const options = [1 / 12, 0.25, 0.5, 1, 2, 4, 8].filter((h) => h <= CFG.autoMaxHours);
-  let hours = 1 / 12;
+  let sel = 0;
+  let data = null;
   const wrap = document.createElement('div');
   wrap.className = 'modal-wrap';
   wrap.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true" style="--c:${s.color}">
       <div class="row" style="gap:12px"><span class="orb">${icon(s.icon)}</span>
         <div><h2 style="margin:0">Trening automatyczny</h2><span class="muted">${s.name} · poziom ${st.level}</span></div></div>
-      <p class="muted">Wybierz, jak długo trenować. Jeden trening co 5 sekund, także gdy nie ma Cię w grze. Koszt pobieramy od razu, a anulowanie zwraca koszt treningów, które się nie odbyły.</p>
-      <div class="hours">${options.map((h) => `<button class="hbtn" data-h="${h}">${hoursLabel(h)}</button>`).join('')}</div>
-      <div class="plan" id="plan">Liczę…</div>
+      <p class="muted">Jeden trening co 5 sekund, także gdy nie ma Cię w grze. Wybrany czas to zawsze pełna liczba treningów. Koszt pobieramy przy starcie, a anulowanie zwraca koszt treningów, które się nie odbyły.</p>
+      <div class="auto-have" id="auto-have"></div>
+      <div class="auto-table" id="auto-table">Liczę…</div>
+      <div class="auto-detail" id="auto-detail"></div>
       <div class="row" style="justify-content:flex-end">
         <button class="ghost" id="auto-close">Zamknij</button>
         <button id="auto-go" disabled>Rozpocznij</button>
@@ -639,40 +640,46 @@ function autoPanel(spec) {
   const close = () => wrap.remove();
   wrap.addEventListener('click', (e) => e.target === wrap && close());
   wrap.querySelector('#auto-close').onclick = close;
-  let req = 0;
-  const update = async () => {
-    wrap.querySelectorAll('.hbtn').forEach((b) => b.classList.toggle('on', Number(b.dataset.h) === hours));
-    const id = ++req;
+  const paint = () => {
+    const o = data.options[sel];
+    wrap.querySelector('#auto-table').innerHTML = `
+      <div class="at-row at-head"><span>Czas</span><span>Treningi</span><span>Punkty</span><span>Monety</span><span>Energia</span></div>
+      ${data.options
+        .map(
+          (x, i) => `<button class="at-row ${i === sel ? 'on' : ''} ${x.affordable ? '' : 'no'}" data-i="${i}">
+            <span><b>${hoursLabel(x.hours)}</b></span><span>${fmt(x.count)}</span><span>+${x.levels}</span>
+            <span class="${x.missingMoney ? 'lack' : ''}">${fmt(x.money)}</span><span class="${x.missingEnergy ? 'lack' : ''}">${fmt(x.energy)}</span>
+          </button>`,
+        )
+        .join('')}`;
+    wrap.querySelectorAll('.at-row[data-i]').forEach((b) => (b.onclick = () => ((sel = Number(b.dataset.i)), paint())));
+    const lacks = [];
+    if (o.missingMoney) lacks.push(`${fmt(o.missingMoney)} monet`);
+    if (o.missingEnergy) lacks.push(`${fmt(o.missingEnergy)} energii`);
+    wrap.querySelector('#auto-detail').innerHTML = `
+      <p class="plan-line">${hoursLabel(o.hours)}: <b>${fmt(o.count)}</b> treningów, ${s.name} poziom <b>${st.level}</b> → <b>${st.level + o.levels}</b>, koniec ok. ${clock(now() + o.durationMs)}.</p>
+      ${o.affordable ? '<p class="ok-text">Stać Cię na ten trening.</p>' : `<p class="warn-text">Brakuje Ci ${lacks.join(' i ')}.</p>`}`;
+    wrap.querySelector('#auto-go').disabled = false;
+  };
+  api('/auto/plan', { spec })
+    .then((d) => {
+      data = d;
+      wrap.querySelector('#auto-have').innerHTML = `Masz: <b>💰 ${fmt(d.money)}</b> · <b>⚡ ${fmt(d.energy)}</b>`;
+      paint();
+    })
+    .catch((e) => (wrap.querySelector('#auto-table').textContent = e.message));
+  wrap.querySelector('#auto-go').onclick = async () => {
     try {
-      const plan = await api('/auto/plan', { spec, hours });
-      if (id !== req) return;
-      const full = plan.count >= plan.slots;
-      const short = !full && plan.count > 0;
-      const reason = plan.limit === 'money' ? 'monet' : 'energii';
-      wrap.querySelector('#plan').innerHTML = plan.count
-        ? `<div class="plan-grid">
-            <div><b>${plan.count}</b><span>treningów</span></div>
-            <div><b>+${plan.levels}</b><span>pkt ${s.name}</span></div>
-            <div><b>${fmt(plan.money)}</b><span>monet</span></div>
-            <div><b>${fmt(plan.energy)}</b><span>energii</span></div>
-          </div>
-          <p class="plan-line">${s.name}: poziom <b>${st.level}</b> → <b>${st.level + plan.levels}</b></p>
-          <p class="muted">W ${hoursLabel(hours)} mieści się do ${fmt(plan.slots)} treningów.
-            ${full ? `Stać Cię na wszystkie, koniec ok. ${clock(now() + plan.durationMs)}.`
-              : `Stać Cię na ${plan.count}, więc trening potrwa ${Math.ceil(plan.durationMs / 60000)} min (koniec ok. ${clock(now() + plan.durationMs)}).`}</p>
-          ${short ? `<p class="warn-text">Na pełne ${hoursLabel(hours)} brakuje Ci ${reason}.</p>` : ''}`
-        : `<p class="err-text">Nie stać Cię nawet na jeden trening. Zdobądź monety albo poczekaj na energię.</p>`;
-      wrap.querySelector('#auto-go').disabled = !plan.count;
+      const r = await api('/auto/start', { spec, hours: data.options[sel].hours });
+      toast(r.message);
+      close();
+      await refreshMe();
+      render();
     } catch (e) {
-      wrap.querySelector('#plan').textContent = e.message;
+      wrap.querySelector('#auto-detail').insertAdjacentHTML('beforeend', `<p class="err-text">${esc(e.message)}</p>`);
+      toast(e.message, true);
     }
   };
-  wrap.querySelectorAll('.hbtn').forEach((b) => (b.onclick = () => ((hours = Number(b.dataset.h)), update())));
-  wrap.querySelector('#auto-go').onclick = async () => {
-    const r = await act('/auto/start', { spec, hours });
-    if (r) close();
-  };
-  update();
 }
 
 function matchRow(m, perspectiveId) {
@@ -739,13 +746,14 @@ async function penaltyGame() {
     <div class="pk">
       <div class="pk-board">
         <div class="pk-side me">${avatar(p, 'sm')}<b>${esc(p.name)}</b><div class="pk-dots" id="dots-my"></div></div>
-        <div class="pk-score"><span id="sc-my">0</span><i>:</i><span id="sc-op">0</span></div>
+        <div class="pk-score"><span id="sc-my">0</span><i>:</i><span id="sc-op">0</span><small id="pk-sd" hidden>Seria dodatkowa</small></div>
         <div class="pk-side op"><b>${esc(opp.name)}</b>${avatar(opp, 'sm')}<div class="pk-dots" id="dots-op"></div></div>
       </div>
       <div class="pk-stage">
         <canvas id="pk-canvas" aria-label="Rzuty karne"></canvas>
         <div class="pk-hint" id="pk-hint"></div>
       </div>
+      <div class="pk-toss" id="pk-toss" hidden></div>
       <div class="pk-end" id="pk-end" hidden></div>
     </div>`;
   const scene = PenaltyScene($('#pk-canvas'));
@@ -761,6 +769,7 @@ async function penaltyGame() {
     $('#dots-op').innerHTML = dots(op, total);
     $('#sc-my').textContent = status.me;
     $('#sc-op').textContent = status.op;
+    $('#pk-sd').hidden = !status.suddenDeath;
   };
   const hint = (html) => ($('#pk-hint').innerHTML = html);
   const next = (status) => {
@@ -805,7 +814,26 @@ async function penaltyGame() {
     }
     next(r.status);
   }
-  const statusNow = () => ({ me: my.filter((k) => k === 'goal').length, op: op.filter((k) => k === 'goal').length, turn: my.length === op.length ? 'shoot' : 'save', finished: false });
+  const statusNow = () => {
+    const even = my.length === op.length;
+    return {
+      me: my.filter((k) => k === 'goal').length,
+      op: op.filter((k) => k === 'goal').length,
+      turn: duel.first === 'my' ? (even ? 'shoot' : 'save') : even ? 'save' : 'shoot',
+      finished: false,
+    };
+  };
+  // Losowanie: kto strzela pierwszy (jak przed prawdziwą serią karnych).
+  if (!duel.my.length && !duel.op.length) {
+    scene.show(duel.first === 'my' ? 'shoot' : 'save');
+    const toss = $('#pk-toss');
+    toss.hidden = false;
+    toss.innerHTML = `<div class="coin"><span>FS</span><span>⚽</span></div><p>Losowanie…</p>`;
+    await new Promise((r) => setTimeout(r, 1300));
+    toss.querySelector('p').innerHTML = duel.first === 'my' ? '<b>Zaczynasz Ty!</b> Pierwszy strzał należy do Ciebie.' : `<b>Zaczyna ${esc(opp.name)}.</b> Najpierw bronisz.`;
+    await new Promise((r) => setTimeout(r, 1500));
+    toss.hidden = true;
+  }
   next(duel.status);
 }
 
