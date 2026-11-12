@@ -65,7 +65,8 @@
   }
   // widok strzału: kamera za piłką; widok obrony: kamera z bramki w stronę strzelca
   const CAM = {
-    shoot: camera([0, 2.2, 19.5], [0, 0.9, 0], 1150, 400, 250),
+    // wysoko i daleko za strzelcem: widać całe pole karne
+    shoot: camera([0, 24, 60], [0, 0, 10], 2642, 400, 340),
     save: camera([0, 1.65, -0.8], [0, 0.55, 11], 640, 400, 322),
   };
 
@@ -101,7 +102,9 @@
       g.closePath();
       g.fill();
     };
-    // trybuny (za bramką w widoku strzału, za polem karnym w widoku obrony)
+    if (view === 'shoot') drawStand(g, r, P(0, 0.8, -4).y);
+    // trybuny (za polem karnym w widoku obrony)
+    if (view === 'save') {
     const far = view === 'shoot' ? -1 : 1;
     const z0 = view === 'shoot' ? -6.5 : 62;
     for (let tier = 0; tier < 16; tier++) {
@@ -127,8 +130,9 @@
       }
       g.globalAlpha = 1;
     }
+    }
     // jupitery
-    for (const fx of [70, W - 70]) {
+    if (view === 'save') for (const fx of [70, W - 70]) {
       const glow = g.createRadialGradient(fx, 26, 0, fx, 26, 200);
       glow.addColorStop(0, 'rgba(225,255,235,.45)');
       glow.addColorStop(1, 'rgba(225,255,235,0)');
@@ -140,18 +144,21 @@
       for (let i = 0; i < 5; i++) for (let j = 0; j < 3; j++) g.fillRect(fx - 29 + i * 12, 11 + j * 10, 10, 8);
     }
     // murawa: pasy koszenia równoległe do linii bramkowej (co 5,5 m) i lekka szachownica
-    const zMin = view === 'shoot' ? -6 : 0.2;
-    const zMax = view === 'shoot' ? 18.5 : 62;
-    const step = 2.75;
+    const zMin = view === 'shoot' ? -4 : 0.2;
+    const zMax = view === 'shoot' ? 32 : 62;
+    const step = view === 'shoot' ? 3 : 2.75;
+    const xs = view === 'shoot' ? 3.66 : 14;
+    const bright = view === 'shoot';
+    const GRASS = bright ? ['#5fbf32', '#56b42c', '#4eab27', '#47a123'] : ['#25883a', '#238437', '#1f7832', '#1d7430'];
     for (let z = Math.floor(zMin / step) * step; z < zMax; z += step) {
       const z1 = Math.max(z, zMin);
       const z2 = Math.min(z + step, zMax);
-      for (let x = -42; x < 42; x += 14) {
-        const a = P(x, 0, z1), b = P(x + 14, 0, z1), d = P(x + 14, 0, z2), e = P(x, 0, z2);
+      for (let x = -44; x < 44; x += xs) {
+        const a = P(x, 0, z1), b = P(x + xs, 0, z1), d = P(x + xs, 0, z2), e = P(x, 0, z2);
         if (a.z < 1 || d.z < 1) continue;
         const stripe = Math.round(z / step) % 2 === 0;
-        const check = Math.round(x / 14) % 2 === 0;
-        poly([a, b, d, e], stripe ? (check ? '#25883a' : '#238437') : check ? '#1f7832' : '#1d7430');
+        const check = Math.round(x / xs) % 2 === 0;
+        poly([a, b, d, e], GRASS[(stripe ? 0 : 2) + (check ? 0 : 1)]);
       }
     }
     // faktura trawy
@@ -194,7 +201,7 @@
     g.ellipse(spot.x, spot.y, spot.s * 0.12, spot.s * 0.05, 0, 0, PI * 2);
     g.fill();
     // bandy reklamowe za bramką / za polem karnym
-    const bz = view === 'shoot' ? -5 : 60;
+    const bz = view === 'shoot' ? -4 : 60;
     const ba = P(-40, 0, bz), bb = P(40, 0, bz), bc = P(40, 0.8, bz), bd = P(-40, 0.8, bz);
     const adg = g.createLinearGradient(0, bd.y, 0, ba.y);
     adg.addColorStop(0, '#17532a');
@@ -214,6 +221,63 @@
     g.fillStyle = vig;
     g.fillRect(0, 0, W, H);
     return c;
+  }
+
+  // Trybuna z kibicami (widok strzału): rzędy postaci, część z rękami w górze, szaliki.
+  function drawStand(g, r, bottom) {
+    const bg = g.createLinearGradient(0, 0, 0, bottom);
+    bg.addColorStop(0, '#0a1622');
+    bg.addColorStop(1, '#16304a');
+    g.fillStyle = bg;
+    g.fillRect(0, 0, W, bottom);
+    const COLORS = ['#b6f23a', '#2f6fd6', '#e9eef2', '#6f35d9', '#ff7a1a', '#1d3d63', '#2a5582'];
+    const SKIN = ['#f0c4a2', '#c98d66', '#8d5a3c', '#e8b48c'];
+    const rows = Math.ceil(bottom / 11) + 1;
+    for (let row = 0; row < rows; row++) {
+      const y = 6 + row * 11;
+      const sz = 4 + row * 0.25;
+      for (let x = (row % 2) * 6; x < W + 10; x += 11 + r() * 3) {
+        const c = COLORS[Math.floor(r() * COLORS.length)];
+        g.globalAlpha = 0.55 + (row / rows) * 0.45;
+        g.fillStyle = c;
+        g.beginPath();
+        g.roundRect(x - sz * 0.7, y, sz * 1.4, sz * 1.6, sz * 0.4);
+        g.fill();
+        if (r() < 0.3) {
+          g.strokeStyle = c;
+          g.lineWidth = sz * 0.35;
+          g.beginPath();
+          g.moveTo(x - sz * 0.5, y + sz * 0.2);
+          g.lineTo(x - sz * 0.9, y - sz * 1.2);
+          g.moveTo(x + sz * 0.5, y + sz * 0.2);
+          g.lineTo(x + sz * 0.9, y - sz * 1.2);
+          g.stroke();
+        }
+        g.fillStyle = SKIN[Math.floor(r() * SKIN.length)];
+        g.beginPath();
+        g.arc(x, y - sz * 0.35, sz * 0.55, 0, PI * 2);
+        g.fill();
+      }
+    }
+    g.globalAlpha = 1;
+    // szaliki i flaga
+    for (let i = 0; i < 6; i++) {
+      const x = 40 + r() * (W - 80);
+      const y = 10 + r() * (bottom - 30);
+      g.fillStyle = r() < 0.5 ? '#b6f23a' : '#2f6fd6';
+      g.save();
+      g.translate(x, y);
+      g.rotate((r() - 0.5) * 0.4);
+      g.fillRect(-22, -3, 44, 6);
+      g.fillStyle = '#ffffff';
+      for (let k = -18; k < 22; k += 8) g.fillRect(k, -3, 3, 6);
+      g.restore();
+    }
+    const sh = g.createLinearGradient(0, bottom - 18, 0, bottom);
+    sh.addColorStop(0, 'rgba(0,0,0,0)');
+    sh.addColorStop(1, 'rgba(0,0,0,.45)');
+    g.fillStyle = sh;
+    g.fillRect(0, bottom - 18, W, 18);
   }
 
   // ---------- postać szkieletowa ----------
@@ -610,10 +674,10 @@
     const run = seg(t, 0, 0.5);
     const e = ease(run);
     // tor rozbiegu po łuku: z lewej, z tyłu, do piłki
-    const wx = lerp(-2.3, -0.5, e) + Math.sin(e * PI) * 0.3;
-    const wz = lerp(12.9, SPOT + 0.42, e);
+    const wx = lerp(-2.6, -0.5, e);
+    const wz = lerp(14.0, SPOT + 0.38, e);
     const p = cam.p(wx, 0, wz);
-    const h = p.s * 1.82;
+    const h = p.s * 1.85;
     const ph = run * PI * 6.5;
     const slow = seg(t, 0.38, 0.5);
     const stride = Math.sin(ph) * (1 - slow);
@@ -1270,7 +1334,9 @@
       const sc = t < 0.14 ? lerp(0.4, 1.15, t / 0.14) : t < 0.24 ? lerp(1.15, 1, (t - 0.14) / 0.1) : 1;
       g.save();
       g.globalAlpha = t > 0.8 ? 1 - (t - 0.8) / 0.2 : 1;
-      g.translate(W / 2, 140);
+      g.fillStyle = 'rgba(8,30,14,.62)';
+      g.fillRect(0, 230, W, 92);
+      g.translate(W / 2, 276);
       g.scale(sc, sc);
       g.font = '800 78px "Chakra Petch", sans-serif';
       g.textAlign = 'center';
