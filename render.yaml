@@ -1,0 +1,14 @@
+# Konfiguracja hostingu Render (darmowy plan). Baza danych: zewnętrzny PostgreSQL (np. Neon),
+# adres podajesz w zmiennej DATABASE_URL w panelu Render.
+services:
+  - type: web
+    name: football-stars
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false

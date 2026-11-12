@@ -37,13 +37,16 @@ test('przedmioty dodają bonusy do statystyk', () => {
 
 // --- test integracyjny API ---
 async function withServer(fn) {
-  const db = openDb(':memory:');
-  const server = createApp(db).listen(0);
+  // TEST_DATABASE_URL pozwala puścić ten sam test na prawdziwym PostgreSQL (pustej bazie).
+  const db = await openDb({ url: process.env.TEST_DATABASE_URL || '', dir: 'memory' });
+  const clock = { t: Date.now() };
+  const server = createApp(db, { now: () => clock.t }).listen(0);
   const base = `http://127.0.0.1:${server.address().port}/api`;
   try {
-    await fn(base);
+    await fn(base, clock);
   } finally {
     server.close();
+    await db.close();
   }
 }
 
@@ -62,7 +65,7 @@ function client(base) {
 }
 
 test('pełny przebieg: rejestracja, trening, sparing, klub', async () => {
-  await withServer(async (base) => {
+  await withServer(async (base, clock) => {
     const a = client(base);
     const b = client(base);
     const c = client(base);
@@ -88,7 +91,7 @@ test('pełny przebieg: rejestracja, trening, sparing, klub', async () => {
     let money = (await a('/me')).data.player.money;
     while (money < 500) {
       const r = await a('/duel', { opponentId: bId });
-      if (r.status !== 200) break;
+      if (r.status !== 200) clock.t += 3600e3;
       money = (await a('/me')).data.player.money;
     }
     const club = await a('/clubs', { name: 'Orły Testowe', tag: 'ORL' });
@@ -110,5 +113,39 @@ test('pełny przebieg: rejestracja, trening, sparing, klub', async () => {
     assert.equal((await b('/chat/club', { body: 'Cześć drużyno!' })).status, 200);
     const chat = await a('/chat/club');
     assert.equal(chat.data.messages[0].body, 'Cześć drużyno!');
+
+    // drugi klub i mecz klubowy
+    const others = [];
+    for (const [n, pos] of [['Dawid', 'BR'], ['Ewa', 'OBR'], ['Filip', 'NAP']]) {
+      const cl = client(base);
+      await cl('/register', { login: n.toLowerCase(), password: 'tajne123' });
+      await cl('/player', { name: n + ' Testowy', position: pos });
+      cl.id = (await cl('/me')).data.player.id;
+      others.push(cl);
+    }
+    const [d, e, f] = others;
+    await d('/daily-bonus', {});
+    let dm = (await d('/me')).data.player.money;
+    while (dm < 500) {
+      if ((await d('/duel', { opponentId: e.id })).status !== 200) clock.t += 3600e3;
+      dm = (await d('/me')).data.player.money;
+    }
+    const club2 = await d('/clubs', { name: 'Rywale FC', tag: 'RYW' });
+    assert.equal(club2.status, 200, JSON.stringify(club2.data));
+    for (const cl of [e, f]) {
+      await cl(`/clubs/${club2.data.clubId}/apply`, {});
+      await d(`/clubs/applications/${cl.id}`, { accept: true });
+    }
+    const cm = await a(`/clubs/challenge/${club2.data.clubId}`, {});
+    assert.equal(cm.status, 200, JSON.stringify(cm.data));
+    assert.equal((await a(`/clubs/challenge/${club2.data.clubId}`, {})).status, 400); // przerwa między meczami
+    const table = (await a('/ranking/clubs')).data.clubs;
+    assert.equal(table.reduce((s, c) => s + c.wins + c.draws + c.losses, 0), 2);
+
+    // prezes odchodzi – funkcję przejmuje inny zawodnik
+    assert.equal((await a('/clubs/leave', {})).status, 200);
+    const after = (await b('/clubs/' + clubId)).data;
+    assert.equal(after.members.length, 2);
+    assert.notEqual(after.club.ownerId, (await a('/me')).data.player.id);
   });
 });
