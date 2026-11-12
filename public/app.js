@@ -693,49 +693,167 @@ function matchRow(m, perspectiveId) {
     <td class="muted">${time(m.created_at)}</td><td><a href="#mecz-${m.id}">Relacja</a></td></tr>`;
 }
 
-// ---------- pojedynki: rzuty karne ----------
+// ---------- pojedynki: lobby, wyszukiwanie przeciwnika (jak w grach MOBA) i rozgrywka na żywo ----------
+const mmss2 = (ms) => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
 async function viewDuels(arg) {
   if (arg === 'gra') return penaltyGame();
-  const [{ opponents }, { matches }, { duel }] = await Promise.all([api('/opponents'), api('/my-matches'), api('/penalty/current')]);
+  const [{ stats, recent }, { duel }, queue] = await Promise.all([api('/pvp/stats'), api('/penalty/current'), api('/pvp/status')]);
   const p = ME.player;
+  const pct = stats.played ? Math.round((stats.wins / stats.played) * 100) : 0;
   view.innerHTML = `
-    <div class="duel-hero">
-      <div><h1>Pojedynki</h1>
-        <p>Rzuty karne jeden na jednego. Najpierw strzelasz Ty, potem bronisz. Po ${CFG.penaltyKicks} strzałów wygrywa ten, kto trafił więcej razy, a przy remisie gramy dalej do pierwszej różnicy.</p>
-        <p class="muted">Wyzwanie kosztuje ${CFG.duelEnergy} energii. Wykończenie pomaga trafiać, a Refleks i Chwytanie bronić.</p></div>
-      ${duel ? `<a class="btn" href="#pojedynki-gra">Dokończ pojedynek z ${esc(duel.opponent.name)}</a>` : ''}
-    </div>
-    <div class="grid">
-      <div class="card">
-        <h3>Rywale</h3>
+    <section class="pv">
+      <div class="pv-hero">
+        <aside class="pv-info">
+          <h3>${icon('info', 'sm')} Czym są Pojedynki?</h3>
+          <p>Rzuty karne jeden na jednego z prawdziwym graczem. Raz strzelasz, raz bronisz. Po 5 strzałów wygrywa ten, kto trafił więcej razy, a przy remisie gracie dalej do pierwszej różnicy.</p>
+          <ul>
+            <li>Na każdy ruch masz 10 sekund.</li>
+            <li>Wykończenie daje mocniejszy strzał, Refleks i Chwytanie lepsze obrony.</li>
+            <li>Gdy przez minutę nikt nie szuka gry, zagrasz z botem.</li>
+          </ul>
+        </aside>
+        <div class="pv-center">
+          <p class="pv-kicker">Tryb rywalizacji</p>
+          <h1 class="pv-title">Pojedynki <span>karne</span></h1>
+          ${
+            duel
+              ? `<a class="pv-play" href="#pojedynki-gra"><span>Wróć do gry</span><small>z ${esc(duel.opponent.name)}</small></a>`
+              : `<button class="pv-play" id="pv-play"><span>Graj</span><small>⚡ ${CFG.duelEnergy} energii</small></button>`
+          }
+          <p class="pv-reward">Za wygraną: <b>+2000 ⚡</b> i <b>+500 💰</b></p>
+        </div>
+      </div>
+      <div class="pv-board">
+        <h3>Twoje wyniki w pojedynkach</h3>
+        <div class="pv-stats">
+          <div><b>${stats.played}</b><span>rozegrane</span></div>
+          <div class="w"><b>${stats.wins}</b><span>wygrane</span></div>
+          <div class="l"><b>${stats.losses}</b><span>przegrane</span></div>
+          <div><b>${pct}%</b><span>skuteczność</span></div>
+          <div><b>${stats.goals}:${stats.conceded}</b><span>bramki</span></div>
+          <div><b>#${stats.rank}</b><span>w rankingu</span></div>
+        </div>
         <div class="table-wrap"><table>
-          <tr><th>Piłkarz</th><th>OVR</th><th></th></tr>
-          ${opponents
-            .map(
-              (o) => `<tr><td class="who">${avatar(o, 'sm')}<span class="dot ${o.online ? 'on' : ''}"></span><a href="#gracz-${o.id}">${esc(o.name)}</a>
-                <span class="tag">${o.position}</span></td><td><b>${o.ovr}</b></td>
-                <td><button class="small" data-o="${o.id}">Wyzwij</button></td></tr>`,
-            )
-            .join('') || '<tr><td colspan="3" class="muted">Brak rywali w Twoim zasięgu. Zaproś znajomych!</td></tr>'}
+          ${recent.map((m) => matchRow(m, p.id)).join('') || '<tr><td class="muted">Nie masz jeszcze rozegranych pojedynków. Kliknij Graj!</td></tr>'}
         </table></div>
+        <p class="muted pv-note">Wyniki pojedynków mają osobny ranking (Ranking, zakładka Pojedynki) i nie wpływają na ranking OVR.</p>
       </div>
-      <div class="card">
-        <h3>Ostatnie pojedynki</h3>
-        <div class="table-wrap"><table>${matches.map((m) => matchRow(m, p.id)).join('') || '<tr><td class="muted">Jeszcze nie grałeś.</td></tr>'}</table></div>
-      </div>
-    </div>`;
-  view.querySelectorAll('[data-o]').forEach((b) => (b.onclick = () => startDuel(Number(b.dataset.o), b)));
+    </section>`;
+  const play = $('#pv-play');
+  if (play)
+    play.onclick = async () => {
+      play.disabled = true;
+      try {
+        const r = await api('/pvp/search', {});
+        await refreshMe();
+        r.state === 'found' ? matchFound(r.duel) : searchScreen(r.waited || 0);
+      } catch (e) {
+        toast(e.message, true);
+        play.disabled = false;
+      }
+    };
+  if (!duel && queue.state === 'searching') searchScreen(queue.waited);
 }
 
-async function startDuel(opponentId, btn) {
-  if (btn) btn.disabled = true;
-  const r = await act('/penalty/start', { opponentId }, { reload: false });
-  if (r) location.hash = '#pojedynki-gra';
-  else if (btn) btn.disabled = false;
+// Ekran wyszukiwania: radar, licznik czasu, liczba szukających, anulowanie.
+function searchScreen(waited) {
+  document.querySelector('.mm')?.remove();
+  const p = ME.player;
+  const started = Date.now() - waited;
+  const el = document.createElement('div');
+  el.className = 'mm';
+  el.innerHTML = `
+    <div class="mm-box">
+      <div class="mm-radar">
+        <i></i><i></i><i></i><span class="mm-sweep"></span>
+        <div class="mm-me">${avatar(p, 'lg')}</div>
+      </div>
+      <h2 class="mm-title">Szukanie przeciwnika</h2>
+      <div class="mm-time" id="mm-time">0:00</div>
+      <p class="mm-est">Szacowany czas: <b>0:30</b></p>
+      <p class="mm-info" id="mm-info">Łączymy Cię z graczem o podobnym OVR…</p>
+      <div class="mm-bar"><i id="mm-bar"></i></div>
+      <button class="ghost" id="mm-cancel">Anuluj</button>
+    </div>`;
+  document.body.append(el);
+  let alive = true;
+  const stop = () => {
+    alive = false;
+    clearInterval(clock);
+    el.remove();
+    window.removeEventListener('hashchange', onLeave);
+  };
+  const onLeave = () => {
+    if (!alive) return;
+    stop();
+    api('/pvp/cancel', {}).catch(() => {});
+  };
+  window.addEventListener('hashchange', onLeave);
+  const clock = setInterval(() => {
+    const t = Date.now() - started;
+    $('#mm-time').textContent = mmss2(t);
+    $('#mm-bar').style.width = `${Math.min(100, (t / 60000) * 100)}%`;
+    if (t > 45000) $('#mm-info').textContent = 'Mało graczy w kolejce. Za chwilę dobierzemy przeciwnika…';
+  }, 250);
+  el.querySelector('#mm-cancel').onclick = async () => {
+    stop();
+    await api('/pvp/cancel', {}).catch(() => {});
+    toast('Anulowano szukanie.');
+  };
+  const poll = async () => {
+    if (!alive) return;
+    try {
+      const r = await api('/pvp/status');
+      if (!alive) return;
+      if (r.state === 'found') {
+        stop();
+        return matchFound(r.duel);
+      }
+      if (r.state === 'idle') return stop();
+      if (r.searching > 1) $('#mm-info').textContent = `W kolejce: ${r.searching} graczy. Dobieramy parę…`;
+    } catch {}
+    setTimeout(poll, 1000);
+  };
+  setTimeout(poll, 700);
+}
+
+// Przeciwnik znaleziony: ekran VS z odliczaniem.
+function matchFound(duel) {
+  document.querySelector('.mm')?.remove();
+  const p = ME.player;
+  const o = duel.opponent;
+  const el = document.createElement('div');
+  el.className = 'mm found';
+  el.innerHTML = `
+    <div class="mm-box">
+      <p class="mm-kicker">${o.bot ? 'Nie znaleźliśmy gracza, gracie z botem' : 'Znaleziono przeciwnika!'}</p>
+      <div class="vs">
+        <div class="vs-card me">${avatar(p, 'lg')}<b>${esc(p.name)}</b><span>${CFG.positions[p.position]} · OVR ${p.ovr}</span></div>
+        <div class="vs-mark">VS</div>
+        <div class="vs-card op">${avatar(o, 'lg')}<b>${esc(o.name)}</b><span>${CFG.positions[o.position]} · OVR ${o.ovr}${o.bot ? ' · <em>Bot</em>' : ''}</span></div>
+      </div>
+      <div class="mm-count" id="mm-count">3</div>
+    </div>`;
+  document.body.append(el);
+  let n = 3;
+  const t = setInterval(() => {
+    n -= 1;
+    if (n > 0) el.querySelector('#mm-count').textContent = n;
+    else {
+      clearInterval(t);
+      el.remove();
+      location.hash = '#pojedynki-gra';
+      if (location.hash === '#pojedynki-gra') render();
+    }
+  }, 900);
 }
 
 async function penaltyGame() {
-  const { duel } = await api('/penalty/current');
+  let duel = (await api('/penalty/current')).duel;
   if (!duel) {
     location.hash = '#pojedynki';
     return;
@@ -747,126 +865,161 @@ async function penaltyGame() {
       <div class="pk-board">
         <div class="pk-side me">${avatar(p, 'sm')}<b>${esc(p.name)}</b><div class="pk-dots" id="dots-my"></div></div>
         <div class="pk-score"><span id="sc-my">0</span><i>:</i><span id="sc-op">0</span><small id="pk-sd" hidden>Seria dodatkowa</small></div>
-        <div class="pk-side op"><b>${esc(opp.name)}</b>${avatar(opp, 'sm')}<div class="pk-dots" id="dots-op"></div></div>
+        <div class="pk-side op"><b>${esc(opp.name)}${opp.bot ? ' <em class="bot-tag">Bot</em>' : ''}</b>${avatar(opp, 'sm')}<div class="pk-dots" id="dots-op"></div></div>
       </div>
       <div class="pk-stage">
         <canvas id="pk-canvas" aria-label="Rzuty karne"></canvas>
         <div class="pk-hint" id="pk-hint"></div>
         <div class="pk-timer" id="pk-timer" hidden><b>10</b></div>
+        <div class="pk-toss" id="pk-toss" hidden></div>
       </div>
-      <div class="pk-toss" id="pk-toss" hidden></div>
       <div class="pk-end" id="pk-end" hidden></div>
     </div>`;
-  const scene = PenaltyScene($('#pk-canvas'));
-  let my = duel.my;
-  let op = duel.op;
-  const dots = (list, total) => {
-    const n = Math.max(total, list.length);
-    return Array.from({ length: n }, (_, i) => `<span class="pk-dot ${list[i] ? (list[i] === 'goal' ? 'g' : 'x') : ''}"></span>`).join('');
-  };
-  const paint = (status) => {
+  const canvas = $('#pk-canvas');
+  const scene = PenaltyScene(canvas);
+  const alive = () => document.body.contains(canvas);
+  let shown = duel.kicks.length; // nie odtwarzamy ruchów sprzed wejścia na ekran
+  let my = duel.my.slice(0, 0);
+  let op = [];
+  for (const k of duel.kicks) (k.side === 'my' ? my : op).push(k.result);
+  const dots = (list, total) =>
+    Array.from({ length: Math.max(total, list.length) }, (_, i) => `<span class="pk-dot ${list[i] ? (list[i] === 'goal' ? 'g' : 'x') : ''}"></span>`).join('');
+  const paint = (suddenDeath) => {
     const total = Math.max(CFG.penaltyKicks, my.length, op.length);
     $('#dots-my').innerHTML = dots(my, total);
     $('#dots-op').innerHTML = dots(op, total);
-    $('#sc-my').textContent = status.me;
-    $('#sc-op').textContent = status.op;
-    $('#pk-sd').hidden = !status.suddenDeath;
+    $('#sc-my').textContent = my.filter((r) => r === 'goal').length;
+    $('#sc-op').textContent = op.filter((r) => r === 'goal').length;
+    $('#pk-sd').hidden = !suddenDeath;
   };
   const hint = (html) => ($('#pk-hint').innerHTML = html);
-  // 10 sekund na decyzję: napastnik bez kliknięcia strzela obok bramki, bramkarz zostaje w środku.
-  const DECIDE_MS = 10000;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  paint(duel.status.suddenDeath);
+
+  // odliczanie czasu na ruch
   let decideTimer = null;
   const stopTimer = () => {
     clearInterval(decideTimer);
     decideTimer = null;
-    $('#pk-timer').hidden = true;
+    if (alive()) $('#pk-timer').hidden = true;
   };
-  const startTimer = (turn) => {
+  const startTimer = (ms, onEnd) => {
     stopTimer();
-    const end = Date.now() + DECIDE_MS;
+    const end = Date.now() + ms;
     const el = $('#pk-timer');
     el.hidden = false;
     const tick = () => {
-      if (!document.body.contains(el)) return stopTimer();
+      if (!alive()) return stopTimer();
       const left = Math.max(0, end - Date.now());
-      el.style.setProperty('--p', left / DECIDE_MS);
+      el.style.setProperty('--p', left / CFG_DECIDE);
       el.querySelector('b').textContent = Math.ceil(left / 1000);
       el.classList.toggle('urgent', left < 3500);
       if (left <= 0) {
         stopTimer();
-        scene.cancel();
-        toast(turn === 'shoot' ? 'Koniec czasu! Strzał poszedł obok bramki.' : 'Koniec czasu! Bramkarz został w środku.', true);
-        kick(turn === 'shoot' ? { x: 1.6, y: 0.4, timeout: true } : { x: 0, y: 0.45, timeout: true });
+        onEnd();
       }
     };
     tick();
     decideTimer = setInterval(tick, 100);
   };
-  const next = (status) => {
-    paint(status);
-    if (status.finished) return;
-    if (status.turn === 'shoot') {
-      hint(`<b>Twój strzał.</b> Stuknij w bramkę tam, gdzie chcesz strzelić.`);
-      scene.wait('shoot', kick);
-    } else {
-      hint(`<b>Bronisz.</b> Stuknij w bramkę tam, gdzie rzuci się Twój bramkarz.`);
-      scene.wait('save', kick);
-    }
-    startTimer(status.turn);
-  };
-  async function kick(target) {
-    stopTimer();
-    hint('');
-    let r;
-    try {
-      r = await api(`/penalty/${duel.id}/kick`, target);
-    } catch (e) {
-      toast(e.message, true);
-      return next(statusNow());
-    }
-    await scene.play(r.kick);
-    my = r.my;
-    op = r.op;
-    if (r.status.finished) {
-      paint(r.status);
-      await refreshMe();
-      const res = r.status.result;
-      $('#pk-end').hidden = false;
-      $('#pk-end').innerHTML = `
-        <h2 class="pk-res ${res}">${res === 'win' ? 'Wygrana!' : res === 'loss' ? 'Porażka' : 'Remis'} ${r.status.me}:${r.status.op}</h2>
-        <p>Nagroda: <b>${fmt(r.reward.money)}</b> 💰</p>
-        <div class="row" style="justify-content:center">
-          <a class="btn" href="#mecz-${r.reward.matchId}">Zobacz przebieg</a>
-          <button class="ghost" id="pk-again">Rewanż</button>
-          <a class="btn ghost-link" href="#pojedynki">Inni rywale</a>
-        </div>`;
-      $('#pk-again').onclick = () => startDuel(opp.id);
-      hint('');
-      return;
-    }
-    next(r.status);
-  }
-  const statusNow = () => {
-    const even = my.length === op.length;
-    return {
-      me: my.filter((k) => k === 'goal').length,
-      op: op.filter((k) => k === 'goal').length,
-      turn: duel.first === 'my' ? (even ? 'shoot' : 'save') : even ? 'save' : 'shoot',
-      finished: false,
-    };
-  };
-  // Losowanie: kto strzela pierwszy (jak przed prawdziwą serią karnych).
-  if (!duel.my.length && !duel.op.length) {
+  const CFG_DECIDE = duel.decideMs || 10000;
+
+  // losowanie, kto zaczyna (tylko przed pierwszym ruchem)
+  if (!duel.kicks.length) {
     scene.show(duel.first === 'my' ? 'shoot' : 'save');
     const toss = $('#pk-toss');
     toss.hidden = false;
     toss.innerHTML = `<div class="coin"><span>FS</span><span>⚽</span></div><p>Losowanie…</p>`;
-    await new Promise((r) => setTimeout(r, 1300));
+    await sleep(1300);
     toss.querySelector('p').innerHTML = duel.first === 'my' ? '<b>Zaczynasz Ty!</b> Pierwszy strzał należy do Ciebie.' : `<b>Zaczyna ${esc(opp.name)}.</b> Najpierw bronisz.`;
-    await new Promise((r) => setTimeout(r, 1500));
+    await sleep(Math.max(1200, (duel.startsIn || 0) - 1300));
     toss.hidden = true;
   }
-  next(duel.status);
+
+  let sending = false;
+  async function send(target) {
+    if (sending) return;
+    sending = true;
+    stopTimer();
+    hint('');
+    try {
+      const r = await api(`/penalty/${duel.id}/kick`, target);
+      sending = false;
+      step(r.duel);
+    } catch (e) {
+      sending = false;
+      toast(e.message, true);
+      step();
+    }
+  }
+
+  async function finish(d) {
+    paint(d.status.suddenDeath);
+    await refreshMe();
+    const res = d.status.result;
+    const rew = d.reward;
+    $('#pk-end').hidden = false;
+    $('#pk-end').innerHTML = `
+      <h2 class="pk-res ${res}">${res === 'win' ? 'Wygrana!' : 'Porażka'} ${d.status.me}:${d.status.op}</h2>
+      <p>${rew && rew.money ? `Nagroda: <b>+${fmt(rew.energy)} ⚡</b> i <b>+${fmt(rew.money)} 💰</b>` : 'Tym razem bez nagrody. Spróbuj jeszcze raz!'}</p>
+      <div class="row" style="justify-content:center">
+        ${d.matchId ? `<a class="btn" href="#mecz-${d.matchId}">Zobacz przebieg</a>` : ''}
+        <a class="btn" href="#pojedynki">Zagraj ponownie</a>
+      </div>`;
+    hint('');
+  }
+
+  // Główna pętla: odtwarza nowe ruchy, potem czeka na mój wybór albo na ruch przeciwnika.
+  let stepping = false;
+  async function step(given) {
+    if (!alive() || stepping) return;
+    stepping = true;
+    try {
+      let d = given;
+      if (!d) {
+        d = (await api('/penalty/current')).duel;
+        if (!d) d = (await api(`/penalty/${duel.id}`)).duel; // seria właśnie się skończyła
+      }
+      while (shown < d.kicks.length && alive()) {
+        const k = d.kicks[shown];
+        stopTimer();
+        hint('');
+        if (k.side === 'my') scene.show('shoot');
+        else if (scene.view !== 'save') scene.show('save');
+        await scene.play(k);
+        shown += 1;
+        (k.side === 'my' ? my : op).push(k.result);
+        paint(d.status.suddenDeath);
+      }
+      if (!alive()) return;
+      if (d.status.finished) return finish(d);
+      if (d.status.turn && !d.waiting) {
+        if (d.status.turn === 'shoot') {
+          hint('<b>Twój strzał.</b> Stuknij w bramkę tam, gdzie chcesz strzelić.');
+          scene.wait('shoot', send);
+        } else {
+          hint('<b>Bronisz.</b> Stuknij w bramkę tam, gdzie rzuci się Twój bramkarz.');
+          scene.wait('save', send);
+        }
+        const ms = Math.max(1000, Math.min(CFG_DECIDE, (d.deadlineIn || CFG_DECIDE) - 2000));
+        const turn = d.status.turn;
+        startTimer(ms, () => {
+          scene.cancel();
+          toast(turn === 'shoot' ? 'Koniec czasu! Strzał poszedł obok bramki.' : 'Koniec czasu! Bramkarz został w środku.', true);
+          send(turn === 'shoot' ? { x: 1.6, y: 0.4, timeout: true } : { x: 0, y: 0.45, timeout: true });
+        });
+        return;
+      }
+      // czekamy na ruch przeciwnika
+      hint(`<span class="dots-anim">Czekam na ruch: ${esc(opp.name)}</span>`);
+      setTimeout(() => step(), 600);
+    } catch (e) {
+      setTimeout(() => step(), 1500);
+    } finally {
+      stepping = false;
+    }
+  }
+  step(duel);
 }
 
 async function viewMatch(id) {
@@ -915,13 +1068,10 @@ async function viewPlayer(id) {
         <p>OVR <b>${p.ovr}</b> · z ekwipunkiem <b>${p.overall}</b></p>
         <p>Klub: ${p.club ? `<a href="#klub-${p.club.id}">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : 'brak'}</p>
         <p>Bilans: <b>${p.wins}</b>W · <b>${p.draws}</b>R · <b>${p.losses}</b>P · ⚽ ${p.goals}</p>
-        ${p.id !== ME.player.id ? `<button id="duel">Wyzwij na pojedynek karnych</button>` : ''}
       </div>
       <div class="card"><h3>Statystyki</h3>${statsTable(p, false)}</div>
       <div class="card"><h3>Ostatnie pojedynki</h3><div class="table-wrap"><table>${matches.map((m) => matchRow(m, p.id)).join('') || '<tr><td class="muted">Brak meczów.</td></tr>'}</table></div></div>
     </div>`;
-  const b = $('#duel');
-  if (b) b.onclick = () => startDuel(p.id, b);
 }
 
 async function viewShop() {
@@ -1098,31 +1248,32 @@ async function viewClub(id) {
 }
 
 async function viewRanking(tab = 'gracze') {
-  const players = tab !== 'kluby';
-  const data = players ? await api('/ranking/players') : await api('/ranking/clubs');
+  const kind = tab === 'kluby' ? 'kluby' : tab === 'pojedynki' ? 'pojedynki' : 'gracze';
+  const data = await api(kind === 'kluby' ? '/ranking/clubs' : kind === 'pojedynki' ? '/ranking/penalty' : '/ranking/players');
+  const tabBtn = (k, label) => `<button class="${kind === k ? 'on' : ''}" onclick="location.hash='#ranking-${k}'">${label}</button>`;
+  let rows;
+  if (kind === 'gracze')
+    rows = `<tr><th>#</th><th>Piłkarz</th><th>Klub</th><th>OVR</th></tr>
+      ${data.players
+        .map((p, i) => `<tr><td>${i + 1}</td><td class="who">${avatar(p, 'sm')}<a href="#gracz-${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
+          <td>${p.club ? `[${esc(p.club.tag)}]` : 'brak'}</td><td><b>${p.ovr}</b></td></tr>`)
+        .join('')}`;
+  else if (kind === 'pojedynki')
+    rows = `<tr><th>#</th><th>Piłkarz</th><th>Wygrane</th><th>Przegrane</th><th>Skuteczność</th><th>Gole</th></tr>
+      ${data.players
+        .map((p, i) => `<tr><td>${i + 1}</td><td class="who">${avatar(p, 'sm')}<a href="#gracz-${p.id}">${esc(p.name)}</a></td>
+          <td><b>${p.wins}</b></td><td>${p.losses}</td><td>${Math.round((p.wins / Math.max(1, p.played)) * 100)}%</td><td>${p.goals}</td></tr>`)
+        .join('') || '<tr><td colspan="6" class="muted">Nikt jeszcze nie rozegrał pojedynku.</td></tr>'}`;
+  else
+    rows = `<tr><th>#</th><th>Klub</th><th>Członkowie</th><th>Pkt</th><th>W/R/P</th></tr>
+      ${data.clubs
+        .map((c, i) => `<tr><td>${i + 1}</td><td><a href="#klub-${c.id}">[${esc(c.tag)}] ${esc(c.name)}</a></td>
+          <td>${c.members}</td><td><b>${c.points}</b></td><td>${c.wins}/${c.draws}/${c.losses}</td></tr>`)
+        .join('') || '<tr><td colspan="5" class="muted">Brak klubów.</td></tr>'}`;
   view.innerHTML = `
     <h1>Ranking</h1>
-    <div class="tabs"><button class="${players ? 'on' : ''}" onclick="location.hash='#ranking-gracze'">Piłkarze</button>
-      <button class="${players ? '' : 'on'}" onclick="location.hash='#ranking-kluby'">Kluby</button></div>
-    <div class="card table-wrap"><table>
-      ${
-        players
-          ? `<tr><th>#</th><th>Piłkarz</th><th>Klub</th><th>OVR</th><th>W/R/P</th></tr>
-             ${data.players
-               .map(
-                 (p, i) => `<tr><td>${i + 1}</td><td class="who">${avatar(p, 'sm')}<a href="#gracz-${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
-                 <td>${p.club ? `[${esc(p.club.tag)}]` : 'brak'}</td><td><b>${p.ovr}</b></td><td>${p.wins}/${p.draws}/${p.losses}</td></tr>`,
-               )
-               .join('')}`
-          : `<tr><th>#</th><th>Klub</th><th>Członkowie</th><th>Pkt</th><th>W/R/P</th></tr>
-             ${data.clubs
-               .map(
-                 (c, i) => `<tr><td>${i + 1}</td><td><a href="#klub-${c.id}">[${esc(c.tag)}] ${esc(c.name)}</a></td>
-                 <td>${c.members}</td><td><b>${c.points}</b></td><td>${c.wins}/${c.draws}/${c.losses}</td></tr>`,
-               )
-               .join('') || '<tr><td colspan="5" class="muted">Brak klubów.</td></tr>'}`
-      }
-    </table></div>`;
+    <div class="tabs">${tabBtn('gracze', 'Piłkarze (OVR)')}${tabBtn('pojedynki', 'Pojedynki')}${tabBtn('kluby', 'Kluby')}</div>
+    <div class="card table-wrap"><table>${rows}</table></div>`;
 }
 
 async function viewChat(channel = 'global') {

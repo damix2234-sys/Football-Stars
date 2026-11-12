@@ -1,7 +1,7 @@
 // Wersja podglądowa: ten sam interfejs co serwer (/api/...), ale cała gra działa
 // w przeglądarce, a pozostali gracze to boty. Wymaga obiektu G (server/game.js).
 (() => {
-  const KEY = 'football-stars-preview-v3';
+  const KEY = 'football-stars-preview-v4';
   const now = () => Date.now();
   let S = null; // stan gry, wczytywany na końcu pliku, gdy wszystkie funkcje są gotowe
 
@@ -26,7 +26,7 @@
 
   // ---------- dane startowe: boty, kluby, czat ----------
   function seed() {
-    S = { seq: {}, users: [], session: null, players: [], inventory: [], clubs: [], apps: [], matches: [], messages: [], notifications: [], autos: [], penalties: [], botTick: now() };
+    S = { seq: {}, users: [], session: null, players: [], inventory: [], clubs: [], apps: [], matches: [], messages: [], notifications: [], autos: [], penalties: [], duels: [], queue: null, botTick: now() };
     const bots = [
       ['Marek Mur', 'OBR', 4], ['Tomek Rakieta', 'NAP', 6], ['Piotr Pajęczyna', 'BR', 5], ['Ola Rozgrywająca', 'POM', 3],
       ['Bartek Skała', 'OBR', 2], ['Zosia Zwinna', 'POM', 4], ['Kuba Kometa', 'NAP', 1], ['Igor Wieża', 'BR', 2],
@@ -173,15 +173,15 @@
       type: k.result === 'goal' ? 'goal' : k.result === 'save' ? 'save' : 'miss',
       text: KICK_TEXT[k.result](k.side === 'my' ? me.name : opp.name),
     }));
-    const m = { id: nextId('match'), kind: 'duel', penalty: true, home_id: me.id, away_id: opp.id, home_name: me.name, away_name: opp.name, home_score: s.me, away_score: s.op, events, created_at: t };
+    const m = { id: nextId('match'), kind: 'penalty', penalty: true, home_id: me.id, away_id: opp.id, home_name: me.name, away_name: opp.name, home_score: s.me, away_score: s.op, events, created_at: t };
     S.matches.push(m);
-    const oppRes = s.result === 'win' ? 'loss' : s.result === 'loss' ? 'win' : 'draw';
-    const myRew = G.duelRewards(s.result, me.ovr);
-    const oppRew = G.duelRewards(oppRes, opp.ovr);
-    me.money += myRew.money; me[COL[s.result]]++; me.goals += s.me;
-    opp.money += Math.floor(oppRew.money / 2); opp[COL[oppRes]]++; opp.goals += s.op;
-    notify(opp.id, `${me.name} wyzwał Cię na pojedynek karnych. Wynik: ${s.me}:${s.op}.`);
-    return { money: myRew.money, matchId: m.id };
+    for (const [p, w, gf] of [[me, s.result === 'win', s.me], [opp, s.result !== 'win', s.op]]) {
+      p.pk_played = (p.pk_played || 0) + 1;
+      p.pk_wins = (p.pk_wins || 0) + (w ? 1 : 0);
+      p.pk_losses = (p.pk_losses || 0) + (w ? 0 : 1);
+      p.pk_goals = (p.pk_goals || 0) + gf;
+    }
+    return { matchId: m.id };
   }
   // Pojedynek rozgrywany w całości przez AI (boty między sobą lub bot wyzywa gracza).
   function autoPenalty(me, opp, t = now()) {
@@ -236,7 +236,10 @@
       b.last_seen = S.botTick;
       const r = Math.random();
       if (r < 0.3) say(b, pick(BOT_LINES), S.botTick);
-      else if (r < 0.55 && me && G.inDuelRange(b.ovr, me.ovr)) autoPenalty(b, me, S.botTick);
+      else if (r < 0.55) {
+        const o = pick(bots.filter((x) => x !== b));
+        autoPenalty(b, o, S.botTick);
+      }
       else if (r < 0.8) {
         for (const k of G.SPEC_KEYS) if (Math.random() < 0.2) b.skills[k]++;
         b.ovr = G.ovr(b.skills);
@@ -465,49 +468,187 @@
       .map((o) => publicPlayer(player(o.id)));
     return { opponents };
   });
-  const penaltyView = (d) => {
-    const o = player(d.opponent_id);
-    return { id: d.id, opponent: { id: o.id, name: o.name, position: o.position, ovr: o.ovr }, my: d.my, op: d.op, kicks: d.kicks, first: d.first, status: G.penaltyStatus(d) };
-  };
+  // ---------- pojedynki: wyszukiwanie i rozgrywka (podgląd: przeciwnik zawsze sterowany przez AI) ----------
+  // Ten sam model co na serwerze: gospodarz (gracz) i gość (inny gracz-bot albo bot), ruchy obu stron,
+  // rozstrzygnięcie, gdy oba są znane, 10 s na decyzję.
+  const pkHomeView = (st) => ({
+    my: st.kicks.filter((k) => k.shooter === 'home').map((k) => k.result),
+    op: st.kicks.filter((k) => k.shooter === 'away').map((k) => k.result),
+    first: st.first === 'home' ? 'my' : 'op',
+  });
+  const pkDeadline = (st) => st.turnAt + G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS;
+  const pkActive = (pid) => S.duels.find((d) => d.home === pid && !d.finished);
+  const pkOpp = (d) => (d.bot ? { ...d.bot, id: 0 } : player(d.away));
+  const pkStats = (p) => (p.bot && !p.id ? p.skills : effStats(p));
+
+  function pkView(d) {
+    const hs = G.penaltyStatus(pkHomeView(d));
+    const o = pkOpp(d);
+    const myTurn = hs.turn;
+    const role = myTurn === 'shoot' ? 'shoot' : 'dive';
+    return {
+      id: d.id, mode: d.bot ? 'bot' : 'pvp',
+      opponent: { id: o.id, name: o.name, position: o.position, ovr: o.ovr, bot: !!d.bot },
+      first: d.first === 'home' ? 'my' : 'op',
+      my: d.kicks.filter((k) => k.shooter === 'home').map((k) => k.result),
+      op: d.kicks.filter((k) => k.shooter === 'away').map((k) => k.result),
+      kicks: d.kicks.map((k) => ({ side: k.shooter === 'home' ? 'my' : 'op', target: k.target, ball: k.ball, dive: k.dive, result: k.result })),
+      status: { me: hs.me, op: hs.op, finished: hs.finished, turn: myTurn, suddenDeath: hs.suddenDeath, result: hs.result },
+      waiting: !!(myTurn && d.pending[role]),
+      startsIn: Math.max(0, d.turnAt - now()),
+      deadlineIn: Math.max(0, pkDeadline(d) - now()),
+      decideMs: G.PENALTY_DECIDE_MS,
+      finished: !!d.finished,
+      reward: d.reward || null,
+      matchId: d.matchId || null,
+    };
+  }
+
+  function pkResolve(d) {
+    const hs = G.penaltyStatus(pkHomeView(d));
+    if (hs.finished) return;
+    const shooter = hs.turn === 'shoot' ? 'home' : 'away';
+    const rand = G.rng(d.seed + d.kicks.length * 7919);
+    // przeciwnik (gracz-bot lub bot) wybiera od razu
+    if (shooter === 'away' && !d.pending.shoot) d.pending.shoot = { ...G.aiAim(rand), bot: true };
+    if (shooter === 'home' && !d.pending.dive) d.pending.dive = G.aiDive(rand);
+    const late = now() > pkDeadline(d);
+    if (!late && (!d.pending.shoot || !d.pending.dive)) return;
+    const shot = d.pending.shoot || { ...G.timeoutMove('shoot'), timeout: true };
+    const dive = d.pending.dive || G.timeoutMove('save');
+    const me = player(d.home);
+    const o = pkOpp(d);
+    const shooterStats = shooter === 'home' ? effStats(me) : pkStats(o);
+    const keeperStats = shooter === 'home' ? pkStats(o) : effStats(me);
+    const skillS = G.shooterSkill(shooterStats);
+    const skillK = G.keeperSkill(keeperStats);
+    const ball = shot.bot ? G.ballLanding(shot, skillS, G.rng(d.seed + d.kicks.length * 104729)) : { x: shot.x, y: shot.y };
+    d.kicks.push({ shooter, target: { x: shot.x, y: shot.y }, ball, dive: { x: dive.x, y: dive.y }, result: G.resolveKick(ball, dive, skillK, skillS) });
+    d.pending = {};
+    d.turnAt = now() + G.PENALTY_ANIM_MS;
+    const after = G.penaltyStatus(pkHomeView(d));
+    if (!after.finished) return;
+    d.finished = true;
+    const events = d.kicks.map((k, i) => ({
+      minute: i + 1, side: k.shooter === 'home' ? 0 : 1,
+      type: k.result === 'goal' ? 'goal' : k.result === 'save' ? 'save' : 'miss',
+      text: KICK_TEXT[k.result](k.shooter === 'home' ? me.name : o.name),
+    }));
+    const m = { id: nextId('match'), kind: 'penalty', penalty: true, home_id: me.id, away_id: o.id || 0, home_name: me.name,
+      away_name: d.bot ? `${o.name} (bot)` : o.name, home_score: after.me, away_score: after.op, events, created_at: now() };
+    S.matches.push(m);
+    d.matchId = m.id;
+    const win = after.result === 'win';
+    d.reward = win ? G.PENALTY_WIN_REWARD : { money: 0, energy: 0 };
+    me.money += d.reward.money;
+    me.energy += d.reward.energy;
+    me.pk_played = (me.pk_played || 0) + 1;
+    me.pk_wins = (me.pk_wins || 0) + (win ? 1 : 0);
+    me.pk_losses = (me.pk_losses || 0) + (win ? 0 : 1);
+    me.pk_goals = (me.pk_goals || 0) + after.me;
+    me.pk_conceded = (me.pk_conceded || 0) + after.op;
+    if (!d.bot) {
+      o.pk_played = (o.pk_played || 0) + 1;
+      o.pk_wins = (o.pk_wins || 0) + (win ? 0 : 1);
+      o.pk_losses = (o.pk_losses || 0) + (win ? 1 : 0);
+      o.pk_goals = (o.pk_goals || 0) + after.op;
+      if (!win) o.energy += G.PENALTY_WIN_REWARD.energy, (o.money += G.PENALTY_WIN_REWARD.money);
+    }
+  }
+
+  function pkCreate(p, opp, bot) {
+    spendEnergy(p, G.PENALTY_ENERGY);
+    S.queue = null;
+    const d = { id: nextId('penalty'), home: p.id, away: opp ? opp.id : null, bot, first: Math.random() < 0.5 ? 'home' : 'away',
+      kicks: [], pending: {}, turnAt: now() + G.PENALTY_TOSS_MS, seed: Math.floor(Math.random() * 2 ** 31), finished: false };
+    S.duels.push(d);
+    return d;
+  }
+  // Kolejka: w podglądzie innym "graczem" w kolejce jest jeden z botów (po kilku–kilkunastu sekundach);
+  // gdyby nikt się nie znalazł, po minucie dobieramy zwykłego bota.
+  function pkTryMatch(p) {
+    const q = S.queue;
+    if (!q || q.player !== p.id) return null;
+    const waited = now() - q.joinedAt;
+    if (now() >= q.matchAt) {
+      const pool = S.players.filter((o) => o.bot && o.id !== p.id && (G.inDuelRange(o.ovr, p.ovr) || waited > 20000));
+      if (pool.length) return pkCreate(p, pool[Math.floor(Math.random() * pool.length)], null);
+    }
+    if (waited >= G.MATCH_BOT_AFTER_MS) return pkCreate(p, null, G.makeBot(p.ovr, G.rng(Math.floor(Math.random() * 2 ** 31))));
+    return null;
+  }
+  post('/pvp/search', () => {
+    const p = me();
+    const open = pkActive(p.id);
+    if (open) return { state: 'found', duel: pkView(open) };
+    if (p.energy < G.PENALTY_ENERGY) fail(`Za mało energii. Pojedynek kosztuje ${G.PENALTY_ENERGY}.`);
+    if (!S.queue || S.queue.player !== p.id) S.queue = { player: p.id, joinedAt: now(), matchAt: now() + 4000 + Math.random() * 16000 };
+    const d = pkTryMatch(p);
+    if (d) return { state: 'found', duel: pkView(d) };
+    return { state: 'searching', waited: now() - S.queue.joinedAt };
+  });
+  get('/pvp/status', () => {
+    const p = me();
+    const open = pkActive(p.id);
+    if (open) return { state: 'found', duel: pkView(open) };
+    if (!S.queue || S.queue.player !== p.id) return { state: 'idle' };
+    const d = pkTryMatch(p);
+    if (d) return { state: 'found', duel: pkView(d) };
+    return { state: 'searching', waited: now() - S.queue.joinedAt, searching: 1 + Math.floor(Math.random() * 3), botAfter: G.MATCH_BOT_AFTER_MS };
+  });
+  post('/pvp/cancel', () => {
+    S.queue = null;
+  });
   get('/penalty/current', () => {
     const p = me();
-    const d = S.penalties.find((x) => x.player_id === p.id && !x.finished);
-    return { duel: d ? penaltyView(d) : null };
+    const d = pkActive(p.id);
+    if (!d) return { duel: null };
+    if (!d.pending.shoot && !d.pending.dive && now() > pkDeadline(d)) d.turnAt = now();
+    pkResolve(d);
+    return { duel: pkView(d) };
   });
-  post('/penalty/start', (b) => {
+  get('/penalty/:id', (b, id) => {
     const p = me();
-    const open = S.penalties.find((x) => x.player_id === p.id && !x.finished);
-    if (open) return { duel: penaltyView(open) };
-    const opp = player(Number(b.opponentId));
-    if (!opp || opp.id === p.id) fail('Nieprawidłowy rywal.');
-    if (!G.inDuelRange(p.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
-    spendEnergy(p, G.PENALTY_ENERGY);
-    const d = { id: nextId('penalty'), player_id: p.id, opponent_id: opp.id, seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [], first: Math.random() < 0.5 ? 'my' : 'op', turnAt: now(), finished: false };
-    S.penalties.push(d);
-    return { duel: penaltyView(d) };
+    const d = S.duels.find((x) => x.id === id && x.home === p.id);
+    if (!d) fail('Nie ma takiego pojedynku.');
+    return { duel: pkView(d) };
   });
   post('/penalty/:id/kick', (b, id) => {
     const p = me();
-    const d = S.penalties.find((x) => x.id === id && x.player_id === p.id && !x.finished);
+    const d = S.duels.find((x) => x.id === id && x.home === p.id && !x.finished);
     if (!d) fail('Ten pojedynek już się zakończył.');
-    const opp = player(d.opponent_id);
-    const late = d.turnAt && now() > d.turnAt + G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS;
-    const input = late || b.timeout ? G.timeoutMove(G.penaltyStatus(d).turn) : { x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)), y: Math.max(-0.3, Math.min(1.4, Number(b.y) || 0)) };
-    const kick = penaltyKick(d, p, opp, input);
-    const status = G.penaltyStatus(d);
-    let reward = null;
-    if (status.finished) {
-      d.finished = true;
-      reward = finishPenalty(d, p, opp);
-      S.penalties = S.penalties.filter((x) => x !== d);
+    const v = pkView(d);
+    if (!v.status.turn) fail('Pojedynek się zakończył.');
+    const role = v.status.turn === 'shoot' ? 'shoot' : 'dive';
+    if (!d.pending[role]) {
+      const late = now() > pkDeadline(d);
+      d.pending[role] = late || b.timeout
+        ? { ...G.timeoutMove(role === 'shoot' ? 'shoot' : 'save'), timeout: role === 'shoot' }
+        : { x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)), y: Math.max(-0.3, Math.min(1.4, Number(b.y) || 0)) };
     }
-    return { kick, status, my: d.my, op: d.op, reward };
+    pkResolve(d);
+    return { duel: pkView(d) };
+  });
+  get('/pvp/stats', () => {
+    const p = me();
+    const rank = S.players.filter((o) => (o.pk_wins || 0) > (p.pk_wins || 0)).length + 1;
+    return {
+      stats: { played: p.pk_played || 0, wins: p.pk_wins || 0, losses: p.pk_losses || 0, goals: p.pk_goals || 0, conceded: p.pk_conceded || 0, rank },
+      recent: S.matches.filter((m) => m.kind === 'penalty' && (m.home_id === p.id || m.away_id === p.id)).slice(-8).reverse().map(listMatch),
+    };
+  });
+  get('/ranking/penalty', () => {
+    me();
+    return {
+      players: S.players.filter((p) => p.pk_played).sort((a, b) => (b.pk_wins || 0) - (a.pk_wins || 0) || (a.pk_losses || 0) - (b.pk_losses || 0))
+        .map((p) => ({ id: p.id, name: p.name, position: p.position, ovr: p.ovr, played: p.pk_played, wins: p.pk_wins || 0, losses: p.pk_losses || 0, goals: p.pk_goals || 0 })),
+    };
   });
   get('/matches/:id', (b, id) => {
     me();
     const m = S.matches.find((x) => x.id === id);
     if (!m) fail('Nie ma takiego meczu.');
-    return { match: { ...m, penalty: !!m.penalty } };
+    return { match: { ...m, penalty: !!m.penalty || m.kind === 'penalty' } };
   });
   get('/my-matches', () => {
     const p = me();

@@ -88,6 +88,22 @@ const SCHEMA = `
     created_at BIGINT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS penalty_active ON penalty_duels (player_id, finished);
+  ALTER TABLE penalty_duels ALTER COLUMN opponent_id DROP NOT NULL;
+  CREATE INDEX IF NOT EXISTS penalty_active_away ON penalty_duels (opponent_id, finished);
+
+  -- kolejka wyszukiwania przeciwnika w pojedynkach
+  CREATE TABLE IF NOT EXISTS penalty_queue (
+    player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+    ovr INTEGER NOT NULL,
+    joined_at BIGINT NOT NULL
+  );
+
+  -- wyniki pojedynków karnych (osobno od rankingu OVR)
+  ALTER TABLE players ADD COLUMN IF NOT EXISTS pk_played INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE players ADD COLUMN IF NOT EXISTS pk_wins INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE players ADD COLUMN IF NOT EXISTS pk_losses INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE players ADD COLUMN IF NOT EXISTS pk_goals INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE players ADD COLUMN IF NOT EXISTS pk_conceded INTEGER NOT NULL DEFAULT 0;
 
   CREATE TABLE IF NOT EXISTS club_applications (
     club_id INTEGER NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,

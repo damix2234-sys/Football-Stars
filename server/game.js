@@ -359,7 +359,24 @@ export const PENALTY_KICKS = 5; // po 5 strzałów, potem seria do pierwszej ró
 export const PENALTY_SAFETY = 40;
 // Czas na decyzję w każdym ruchu; serwer dolicza zapas na animację i opóźnienie sieci.
 export const PENALTY_DECIDE_MS = 10000;
-export const PENALTY_GRACE_MS = 6000;
+export const PENALTY_GRACE_MS = 3000;
+export const PENALTY_TOSS_MS = 3500; // losowanie przed pierwszym ruchem
+export const PENALTY_ANIM_MS = 3600; // animacja strzału przed kolejnym ruchem
+export const MATCH_BOT_AFTER_MS = 60000; // po minucie bez gracza dobieramy bota
+export const PENALTY_WIN_REWARD = { money: 500, energy: 2000 };
+
+// Bot do pojedynku: siła zbliżona do OVR gracza.
+const BOT_NAMES = ['Adrian Grom', 'Kamil Wicher', 'Oskar Zryw', 'Filip Rakieta', 'Dawid Skała', 'Bruno Iskra',
+  'Igor Mur', 'Wiktor Strzała', 'Maks Błysk', 'Leo Tornado', 'Szymon Kret', 'Nikodem Pazur'];
+export function makeBot(ovrTarget, rand) {
+  const posList = ['NAP', 'POM', 'OBR', 'BR'];
+  const position = posList[Math.floor(rand() * posList.length)];
+  const skills = startingSkills(position);
+  const base = ovr(skills);
+  const goal = Math.max(base, Math.round(ovrTarget * (0.85 + rand() * 0.3)));
+  for (const k of SPEC_KEYS) skills[k] = Math.round((skills[k] * goal) / base);
+  return { name: BOT_NAMES[Math.floor(rand() * BOT_NAMES.length)], position, ovr: ovr(skills), skills, bot: true };
+}
 // Ruch po czasie: strzał obok bramki albo bramkarz zostaje w środku.
 export const timeoutMove = (turn) => (turn === 'shoot' ? { x: 1.6, y: 0.4 } : { x: 0, y: 0.45 }); // zabezpieczenie przed nieskończoną serią
 

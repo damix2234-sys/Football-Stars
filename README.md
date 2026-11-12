@@ -55,7 +55,9 @@ zamiast innych graczy i zapisem w przeglądarce. Silnik podglądu jest w `previe
     Cię stać, pobiera koszt z góry i wykonuje trening co 5 s także offline; anulowanie zwraca koszt
     niewykonanych treningów; maks. 3 automaty naraz.
 - **Energia:** maksymalnie 500, odnawia się 1 pkt co 10 s. Mecz kosztuje 25.
-- **Mecze 1 na 1** z graczem o podobnym OVR (różnica najwyżej 1,5×), relacja minuta po minucie.
+- **Pojedynki karne:** wyszukiwanie przeciwnika (kolejka graczy, po minucie bot), gra na żywo gracz na gracza:
+  strzał i obrona na zmianę, 10 s na ruch, zasady prawdziwej serii karnych. Wygrana: +2000 energii i +500 monet.
+  Wyniki pojedynków mają osobny ranking (nie wpływają na ranking OVR).
 - **Sklep:** sprzęt w 5 miejscach z bonusami do specjalizacji; lepszy sprzęt wymaga wyższego OVR.
 - **Kluby:** zakładanie (500 monet), zgłoszenia, kasa klubu, mecze klubowe (11 najlepszych zawodników).
 - **Ranking** (wg OVR), **czat** ogólny i klubowy, **wiadomości**, **premia dzienna**.

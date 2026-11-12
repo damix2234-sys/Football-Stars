@@ -100,7 +100,7 @@ function client(base) {
   };
 }
 
-test('pełny przebieg: rejestracja, trening, pojedynek karnych, klub', async () => {
+test('pełny przebieg: rejestracja, trening, wyszukiwanie i pojedynek karnych, klub', async () => {
   await withServer(async (base, clock) => {
     const a = client(base);
     const b = client(base);
@@ -148,39 +148,88 @@ test('pełny przebieg: rejestracja, trening, pojedynek karnych, klub', async () 
     assert.equal(afterCancel.training.autos.length, 0);
 
     const bId = (await b('/me')).data.player.id;
-    // pojedynek karnych: strzelamy i bronimy na zmianę aż do rozstrzygnięcia
-    const moneyBefore = (await a('/me')).data.player.money;
-    const start = await a('/penalty/start', { opponentId: bId });
-    assert.equal(start.status, 200, JSON.stringify(start.data));
-    const duelId = start.data.duel.id;
-    assert.ok(['my', 'op'].includes(start.data.duel.first)); // losowanie, kto zaczyna
-    // ponowny start zwraca ten sam, niedokończony pojedynek
-    assert.equal((await a('/penalty/start', { opponentId: bId })).data.duel.id, duelId);
-    let res;
-    let guard = 0;
-    do {
-      res = await a(`/penalty/${duelId}/kick`, { x: guard % 2 ? -0.7 : 0.7, y: 0.4 });
-      assert.equal(res.status, 200, JSON.stringify(res.data));
-      assert.ok(['goal', 'save', 'miss', 'post'].includes(res.data.kick.result));
-    } while (!res.data.status.finished && ++guard < 40);
-    assert.ok(res.data.status.finished, 'seria musi się zakończyć');
-    assert.ok(res.data.reward.money > 0);
-    assert.equal((await a(`/penalty/${duelId}/kick`, { x: 0, y: 0.5 })).status, 400); // po końcu
-    // limit czasu: spóźniony strzał leci obok bramki
-    const s2 = (await a('/penalty/start', { opponentId: bId })).data.duel;
-    if (s2.status.turn === 'save') await a(`/penalty/${s2.id}/kick`, { x: 0, y: 0.5 });
-    clock.t += G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS + 1000;
-    const lateKick = await a(`/penalty/${s2.id}/kick`, { x: 0, y: 0.5 });
-    assert.equal(lateKick.data.kick.side, 'my');
-    assert.equal(lateKick.data.kick.result, 'miss');
-    let guard2 = 0;
-    let rr;
-    do rr = await a(`/penalty/${s2.id}/kick`, { x: 0.5, y: 0.5 });
-    while (rr.status === 200 && !rr.data.status.finished && ++guard2 < 40);
-    const match = await a('/matches/' + res.data.reward.matchId);
+    // --- pojedynki: wyszukiwanie przeciwnika i gra na żywo (gracz na gracza) ---
+    const meA0 = (await a('/me')).data.player;
+    const meB0 = (await b('/me')).data.player;
+    assert.equal((await a('/pvp/search', {})).data.state, 'searching');
+    assert.equal((await a('/pvp/status')).data.state, 'searching');
+    const found = await b('/pvp/search', {});
+    assert.equal(found.data.state, 'found', JSON.stringify(found.data));
+    assert.equal(found.data.duel.mode, 'pvp');
+    const duelId = found.data.duel.id;
+    assert.equal((await a('/pvp/status')).data.duel.id, duelId);
+    clock.t += G.PENALTY_TOSS_MS;
+    // rozegranie: kto ma ruch, ten klika (strzały zawsze w światło bramki)
+    let view;
+    for (let i = 0; i < 80; i++) {
+      const va = (await a('/penalty/current')).data.duel;
+      if (!va) break;
+      view = va;
+      const vb = (await b('/penalty/current')).data.duel;
+      for (const [cl, v] of [[a, va], [b, vb]]) {
+        if (v && v.status.turn && !v.waiting) {
+          const r = await cl(`/penalty/${duelId}/kick`, v.status.turn === 'shoot' ? { x: (i % 3) * 0.5 - 0.5, y: 0.5 } : { x: 0.6, y: 0.4 });
+          assert.equal(r.status, 200, JSON.stringify(r.data));
+        }
+      }
+      clock.t += G.PENALTY_ANIM_MS;
+    }
+    const endA = (await a(`/penalty/${duelId}`)).data.duel;
+    const endB = (await b(`/penalty/${duelId}`)).data.duel;
+    assert.ok(endA.status.finished, 'seria musi się zakończyć');
+    // obie strony widzą ten sam wynik z własnej perspektywy
+    assert.equal(endA.status.me, endB.status.op);
+    assert.equal(endA.status.op, endB.status.me);
+    // strzały gracza w światło bramki nigdy nie są pudłem
+    assert.ok(endA.kicks.every((k) => k.result !== 'miss' && k.result !== 'post'), JSON.stringify(endA.kicks));
+    // nagroda dla zwycięzcy: 2000 energii i 500 monet; wyniki osobno od rankingu OVR
+    const [winC, winEnd, win0] = endA.status.result === 'win' ? [a, endA, meA0] : [b, endB, meB0];
+    assert.deepEqual(winEnd.reward, G.PENALTY_WIN_REWARD);
+    const winNow = (await winC('/me')).data.player;
+    assert.equal(winNow.money, win0.money + 500);
+    assert.ok(winNow.energy >= win0.energy - G.PENALTY_ENERGY + 2000);
+    const st = (await winC('/pvp/stats')).data.stats;
+    assert.equal(st.wins, 1);
+    assert.equal(winNow.wins, win0.wins); // ranking OVR bez zmian
+    assert.equal((await a('/ranking/penalty')).data.players.length, 2);
+    const match = await a('/matches/' + endA.matchId);
     assert.ok(match.data.match.penalty && match.data.match.events.length >= 6);
+
+    // --- nikt inny nie szuka: po minucie przeciwnikiem zostaje bot ---
+    assert.equal((await a('/pvp/search', {})).data.state, 'searching');
+    clock.t += G.MATCH_BOT_AFTER_MS - 1000;
+    assert.equal((await a('/pvp/status')).data.state, 'searching');
+    clock.t += 2000;
+    const botDuel = (await a('/pvp/status')).data;
+    assert.equal(botDuel.state, 'found');
+    assert.equal(botDuel.duel.mode, 'bot');
+    assert.ok(botDuel.duel.opponent.bot);
+    clock.t += G.PENALTY_TOSS_MS;
+    // spóźniony strzał leci obok bramki; z botem ruch rozstrzyga się od razu
+    let bv = (await a('/penalty/current')).data.duel;
+    if (bv.status.turn === 'save') {
+      bv = (await a(`/penalty/${bv.id}/kick`, { x: 0, y: 0.5 })).data.duel;
+      clock.t += G.PENALTY_ANIM_MS;
+    }
+    const lateId = bv.id;
+    const kicksBefore = bv.kicks.length;
+    const late = (await a(`/penalty/${lateId}/kick`, { x: 0, y: 0.5, timeout: true })).data.duel;
+    assert.equal(late.kicks.length, kicksBefore + 1);
+    assert.equal(late.kicks.at(-1).side, 'my');
+    assert.equal(late.kicks.at(-1).result, 'miss');
+    // powrót po dłuższej przerwie nie psuje strzału z botem (czas liczy się od nowa)
+    clock.t += 120000;
+    let cur = (await a('/penalty/current')).data.duel;
+    for (let i = 0; i < 60 && cur && !cur.status.finished; i++) {
+      if (cur.status.turn === 'shoot') {
+        const r = (await a(`/penalty/${lateId}/kick`, { x: 0.3, y: 0.6 })).data.duel;
+        assert.notEqual(r.kicks.at(-1).result, 'miss');
+        cur = r;
+      } else cur = (await a(`/penalty/${lateId}/kick`, { x: -0.5, y: 0.4 })).data.duel;
+      clock.t += G.PENALTY_ANIM_MS;
+    }
+    assert.ok(cur.status.finished);
     assert.equal((await a('/penalty/current')).data.duel, null);
-    assert.ok((await a('/me')).data.player.money > moneyBefore);
     const club = await a('/clubs', { name: 'Orły Testowe', tag: 'ORL' });
     assert.equal(club.status, 200, JSON.stringify(club.data));
     const clubId = club.data.clubId;

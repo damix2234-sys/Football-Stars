@@ -1672,6 +1672,11 @@
         state.busy = false;
         onPick = cb;
       },
+      get view() {
+        return state.view;
+      },
+      // punkt bramki dla kliknięcia w widoku strzału (używane w testach)
+      targetAt: (sx, sy) => shotTarget(sx, sy),
       // przerwanie oczekiwania na kliknięcie (koniec czasu)
       cancel() {
         onPick = null;

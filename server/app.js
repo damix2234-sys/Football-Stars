@@ -589,137 +589,335 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   const outcome = (a, b) => (a > b ? 'win' : a < b ? 'loss' : 'draw');
   const RESULT_COL = { win: 'wins', draw: 'draws', loss: 'losses' };
 
-  // ---------- pojedynki: seria rzutów karnych ----------
+  // ---------- pojedynki karne: wyszukiwanie przeciwnika i rozgrywka na żywo ----------
+  // Pojedynek to wiersz penalty_duels: player_id = gospodarz ("home"), opponent_id = gość ("away")
+  // albo null, gdy przeciwnikiem jest bot. Stan (JSON):
+  //   { mode: 'pvp'|'bot', first: 'home'|'away', kicks: [{ shooter, target, ball, dive, result }],
+  //     pending: { shoot, dive }, turnAt, bot, seed }
+  // Każdy ruch to strzał jednej strony i rzut bramkarza drugiej; serwer rozstrzyga, gdy oba są znane
+  // (bot wybiera od razu), a po czasie na decyzję brakujący ruch przepada.
   const KICK_TEXT = {
     goal: (who) => `${who} strzela i jest GOL!`,
     save: (who) => `${who} strzela, ale bramkarz broni.`,
     miss: (who) => `${who} strzela obok bramki.`,
-    post: (who) => `${who} trafia w słupek!`,
+    post: (who) => `${who} trafia w obramowanie bramki!`,
   };
   const clampKick = (b) => ({
     x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)),
     y: Math.max(-0.3, Math.min(1.4, Number(b.y) || 0)),
   });
+  // stan w ujęciu gospodarza, w formacie penaltyStatus
+  const homeView = (st) => ({
+    my: st.kicks.filter((k) => k.shooter === 'home').map((k) => k.result),
+    op: st.kicks.filter((k) => k.shooter === 'away').map((k) => k.result),
+    first: st.first === 'home' ? 'my' : 'op',
+  });
+  const activeDuel = (pid, lock = false) =>
+    db.get(
+      `SELECT * FROM penalty_duels WHERE (player_id = ? OR opponent_id = ?) AND finished = 0 ORDER BY id DESC LIMIT 1${lock ? ' FOR UPDATE' : ''}`,
+      pid,
+      pid,
+    );
+  const sideOf = (row, pid) => (row.player_id === pid ? 'home' : 'away');
+  const deadlineOf = (st) => st.turnAt + G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS;
 
-  async function penaltyView(row) {
+  async function participant(row, side) {
     const st = JSON.parse(row.state);
-    const opp = await db.get('SELECT id, name, position, ovr FROM players WHERE id = ?', row.opponent_id);
-    return { id: row.id, opponent: opp, my: st.my, op: st.op, kicks: st.kicks, first: st.first || 'my', status: G.penaltyStatus(st) };
+    if (side === 'away' && st.mode === 'bot') return { ...st.bot, id: 0 };
+    const p = await db.get('SELECT * FROM players WHERE id = ?', side === 'home' ? row.player_id : row.opponent_id);
+    return { id: p.id, name: p.name, position: p.position, ovr: p.ovr, stats: await effStats(p), bot: false };
   }
 
-  app.get(
-    '/api/penalty/current',
+  // Widok pojedynku z perspektywy gracza pid.
+  async function duelView(row, pid) {
+    const st = JSON.parse(row.state);
+    const me = sideOf(row, pid);
+    const them = me === 'home' ? 'away' : 'home';
+    const hs = G.penaltyStatus(homeView(st));
+    const flip = me === 'away';
+    const turnHome = hs.turn; // 'shoot' = strzela gospodarz
+    const myTurn = !turnHome ? null : (turnHome === 'shoot') !== flip ? 'shoot' : 'save';
+    const myRole = myTurn === 'shoot' ? 'shoot' : 'dive';
+    const opp = await participant(row, them);
+    return {
+      id: row.id,
+      mode: st.mode,
+      opponent: { id: opp.id, name: opp.name, position: opp.position, ovr: opp.ovr, bot: !!opp.bot },
+      first: st.first === me ? 'my' : 'op',
+      my: st.kicks.filter((k) => k.shooter === me).map((k) => k.result),
+      op: st.kicks.filter((k) => k.shooter === them).map((k) => k.result),
+      kicks: st.kicks.map((k) => ({ side: k.shooter === me ? 'my' : 'op', target: k.target, ball: k.ball, dive: k.dive, result: k.result })),
+      status: {
+        me: flip ? hs.op : hs.me,
+        op: flip ? hs.me : hs.op,
+        finished: hs.finished,
+        turn: myTurn,
+        suddenDeath: hs.suddenDeath,
+        result: hs.result ? (flip ? { win: 'loss', loss: 'win', draw: 'draw' }[hs.result] : hs.result) : null,
+      },
+      waiting: !!(myTurn && st.pending[myRole]),
+      startsIn: Math.max(0, st.turnAt - now()),
+      deadlineIn: Math.max(0, deadlineOf(st) - now()),
+      decideMs: G.PENALTY_DECIDE_MS,
+      finished: !!row.finished,
+      reward: st.rewards ? st.rewards[me] : null,
+      matchId: st.matchId || null,
+    };
+  }
+
+  // Ruch bota (strzał z rozrzutem albo rzut bramkarza).
+  const botMove = (st, role) => {
+    const rand = G.rng(Number(st.seed) + st.kicks.length * 7919 + (role === 'shoot' ? 1 : 2));
+    return role === 'shoot' ? G.aiAim(rand) : G.aiDive(rand);
+  };
+
+  // Rozstrzyga ruch, jeśli oba wybory są znane albo minął czas. Zwraca true, gdy coś się zmieniło.
+  async function resolveTurn(row, st) {
+    const hs = G.penaltyStatus(homeView(st));
+    if (hs.finished) return false;
+    const shooter = hs.turn === 'shoot' ? 'home' : 'away';
+    const keeper = shooter === 'home' ? 'away' : 'home';
+    if (st.mode === 'bot') {
+      if (shooter === 'away' && !st.pending.shoot) st.pending.shoot = { ...botMove(st, 'shoot'), bot: true };
+      if (keeper === 'away' && !st.pending.dive) st.pending.dive = botMove(st, 'dive');
+    }
+    const late = now() > deadlineOf(st);
+    if (!late && (!st.pending.shoot || !st.pending.dive)) return false;
+    const shot = st.pending.shoot || { ...G.timeoutMove('shoot'), timeout: true };
+    const dive = st.pending.dive || G.timeoutMove('save');
+    const shooterP = await participant(row, shooter);
+    const keeperP = await participant(row, keeper);
+    const skillS = G.shooterSkill(shooterP.stats || shooterP.skills);
+    const skillK = G.keeperSkill(keeperP.stats || keeperP.skills);
+    const rand = G.rng(Number(st.seed) + st.kicks.length * 104729);
+    // strzał gracza leci dokładnie w wybrany punkt; strzał bota ma rozrzut
+    const ball = shot.bot ? G.ballLanding(shot, skillS, rand) : { x: shot.x, y: shot.y };
+    const target = { x: shot.x, y: shot.y };
+    st.kicks.push({ shooter, target, ball, dive: { x: dive.x, y: dive.y }, result: G.resolveKick(ball, dive, skillK, skillS) });
+    st.pending = {};
+    st.turnAt = now() + G.PENALTY_ANIM_MS;
+    const after = G.penaltyStatus(homeView(st));
+    if (after.finished) await finishDuel(row, st, after);
+    return true;
+  }
+
+  async function finishDuel(row, st, hs) {
+    const home = await participant(row, 'home');
+    const away = await participant(row, 'away');
+    const events = st.kicks.map((k, i) => ({
+      minute: i + 1,
+      side: k.shooter === 'home' ? 0 : 1,
+      type: k.result === 'goal' ? 'goal' : k.result === 'save' ? 'save' : 'miss',
+      text: KICK_TEXT[k.result](k.shooter === 'home' ? home.name : away.name),
+    }));
+    const r = await db.run(
+      `INSERT INTO matches (kind, home_id, away_id, home_name, away_name, home_score, away_score, events, created_at)
+       VALUES ('penalty', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      home.id,
+      away.id || 0,
+      home.name,
+      away.bot ? `${away.name} (bot)` : away.name,
+      hs.me,
+      hs.op,
+      JSON.stringify({ penalty: true, events }),
+      now(),
+    );
+    st.matchId = r.rows[0].id;
+    st.rewards = {};
+    const settle = async (side, player, res, goals, conceded) => {
+      if (player.bot) return;
+      const win = res === 'win';
+      const rew = win ? G.PENALTY_WIN_REWARD : { money: 0, energy: 0 };
+      st.rewards[side] = rew;
+      await db.run(
+        `UPDATE players SET money = money + ?, energy = energy + ?, pk_played = pk_played + 1,
+           pk_wins = pk_wins + ?, pk_losses = pk_losses + ?, pk_goals = pk_goals + ?, pk_conceded = pk_conceded + ? WHERE id = ?`,
+        rew.money,
+        rew.energy,
+        win ? 1 : 0,
+        win ? 0 : 1,
+        goals,
+        conceded,
+        player.id,
+      );
+    };
+    await settle('home', home, hs.result, hs.me, hs.op);
+    await settle('away', away, hs.result === 'win' ? 'loss' : 'win', hs.op, hs.me);
+    await db.run('UPDATE penalty_duels SET finished = 1, state = ? WHERE id = ?', JSON.stringify(st), row.id);
+    row.finished = 1;
+  }
+
+  const saveState = (row, st) => {
+    row.state = JSON.stringify(st); // widok budujemy z aktualnego stanu
+    return db.run('UPDATE penalty_duels SET state = ? WHERE id = ?', row.state, row.id);
+  };
+
+  async function createDuel(homeId, awayId, bot) {
+    const seed = crypto.randomInt(2 ** 31);
+    const st = { mode: bot ? 'bot' : 'pvp', first: crypto.randomInt(2) ? 'home' : 'away', kicks: [], pending: {}, turnAt: now() + G.PENALTY_TOSS_MS, bot, seed };
+    for (const id of [homeId, awayId].filter(Boolean)) {
+      const p = await loadPlayer(id);
+      await spendEnergy(p, G.PENALTY_ENERGY);
+    }
+    await db.run('DELETE FROM penalty_queue WHERE player_id = ANY(?)', [homeId, awayId || 0]);
+    const r = await db.run(
+      'INSERT INTO penalty_duels (player_id, opponent_id, seed, state, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *',
+      homeId,
+      awayId,
+      seed,
+      JSON.stringify(st),
+      now(),
+    );
+    return r.rows[0];
+  }
+
+  // Szuka pary w kolejce: najpierw podobny OVR, po 20 s czekania dowolny gracz.
+  async function tryMatch(pid) {
+    const me = await db.get('SELECT * FROM penalty_queue WHERE player_id = ? FOR UPDATE', pid);
+    if (!me) return null;
+    const others = await db.all('SELECT * FROM penalty_queue WHERE player_id != ? ORDER BY joined_at FOR UPDATE', pid);
+    const waited = now() - me.joined_at;
+    const mate = others.find((o) => G.inDuelRange(o.ovr, me.ovr) || waited > 20000 || now() - o.joined_at > 20000);
+    if (mate) {
+      const [home, away] = mate.joined_at <= me.joined_at ? [mate.player_id, pid] : [pid, mate.player_id];
+      return createDuel(home, away, null);
+    }
+    if (waited >= G.MATCH_BOT_AFTER_MS) {
+      const p = await db.get('SELECT ovr FROM players WHERE id = ?', pid);
+      return createDuel(pid, null, G.makeBot(p.ovr, G.rng(crypto.randomInt(2 ** 31))));
+    }
+    return null;
+  }
+
+  app.post(
+    '/api/pvp/search',
     needPlayer,
-    route(async (req) => {
-      const row = await db.get('SELECT * FROM penalty_duels WHERE player_id = ? AND finished = 0', req.playerId);
-      return { duel: row ? await penaltyView(row) : null };
+    action(async (req) => {
+      const open = await activeDuel(req.playerId);
+      if (open) return { state: 'found', duel: await duelView(open, req.playerId) };
+      const p = await loadPlayer(req.playerId);
+      if (p.energy < G.PENALTY_ENERGY) fail(`Za mało energii. Pojedynek kosztuje ${G.PENALTY_ENERGY}.`);
+      await db.run(
+        'INSERT INTO penalty_queue (player_id, ovr, joined_at) VALUES (?, ?, ?) ON CONFLICT (player_id) DO NOTHING',
+        p.id,
+        p.ovr,
+        now(),
+      );
+      const row = await tryMatch(p.id);
+      if (row) return { state: 'found', duel: await duelView(row, p.id) };
+      const q = await db.get('SELECT joined_at FROM penalty_queue WHERE player_id = ?', p.id);
+      return { state: 'searching', waited: now() - q.joined_at };
+    }),
+  );
+
+  app.get(
+    '/api/pvp/status',
+    needPlayer,
+    action(async (req) => {
+      const open = await activeDuel(req.playerId);
+      if (open) return { state: 'found', duel: await duelView(open, req.playerId) };
+      const q = await db.get('SELECT joined_at FROM penalty_queue WHERE player_id = ?', req.playerId);
+      if (!q) return { state: 'idle' };
+      const row = await tryMatch(req.playerId);
+      if (row) return { state: 'found', duel: await duelView(row, req.playerId) };
+      const searching = (await db.get('SELECT COUNT(*) AS n FROM penalty_queue')).n;
+      return { state: 'searching', waited: now() - q.joined_at, searching, botAfter: G.MATCH_BOT_AFTER_MS };
     }),
   );
 
   app.post(
-    '/api/penalty/start',
+    '/api/pvp/cancel',
     needPlayer,
-    action(async (req) => {
-      const open = await db.get('SELECT * FROM penalty_duels WHERE player_id = ? AND finished = 0', req.playerId);
-      if (open) return { duel: await penaltyView(open) }; // dokończ rozpoczęty pojedynek
-      const oppId = Number(req.body.opponentId) || 0;
-      if (oppId === req.playerId) fail('Nieprawidłowy rywal.');
-      const me = await loadPlayer(req.playerId);
-      const opp = await db.get('SELECT * FROM players WHERE id = ?', oppId);
-      if (!opp) fail('Nieprawidłowy rywal.');
-      if (!G.inDuelRange(me.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
-      await spendEnergy(me, G.PENALTY_ENERGY);
-      const r = await db.run(
-        'INSERT INTO penalty_duels (player_id, opponent_id, seed, state, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *',
-        me.id,
-        opp.id,
-        crypto.randomInt(2 ** 31),
-        JSON.stringify({ my: [], op: [], kicks: [], first: crypto.randomInt(2) ? 'my' : 'op', turnAt: now() }),
-        now(),
-      );
-      return { duel: await penaltyView(r.rows[0]) };
+    route(async (req) => {
+      await db.run('DELETE FROM penalty_queue WHERE player_id = ?', req.playerId);
     }),
   );
 
-  // Jeden ruch: strzał (gdy strzelamy) albo wybór miejsca rzutu bramkarza (gdy bronimy).
+  // Aktualny pojedynek (odpytywany co chwilę przez grę).
+  app.get(
+    '/api/penalty/current',
+    needPlayer,
+    action(async (req) => {
+      const row = await activeDuel(req.playerId, true);
+      if (!row) return { duel: null };
+      const st = JSON.parse(row.state);
+      // z botem nie ma kto czekać: po powrocie do gry czas na ruch liczy się od nowa
+      if (st.mode === 'bot' && !st.pending.shoot && !st.pending.dive && now() > deadlineOf(st)) {
+        st.turnAt = now();
+      }
+      await resolveTurn(row, st);
+      await saveState(row, st);
+      return { duel: await duelView(row, req.playerId) };
+    }),
+  );
+
+  // Ostatni zakończony pojedynek (podsumowanie po końcu serii).
+  app.get(
+    '/api/penalty/:id',
+    needPlayer,
+    route(async (req) => {
+      const row = await db.get(
+        'SELECT * FROM penalty_duels WHERE id = ? AND (player_id = ? OR opponent_id = ?)',
+        Number(req.params.id) || 0,
+        req.playerId,
+        req.playerId,
+      );
+      if (!row) fail('Nie ma takiego pojedynku.', 404);
+      return { duel: await duelView(row, req.playerId) };
+    }),
+  );
+
+  // Ruch gracza: strzał (gdy strzela) albo miejsce rzutu (gdy broni).
   app.post(
     '/api/penalty/:id/kick',
     needPlayer,
     action(async (req) => {
       const row = await db.get(
-        'SELECT * FROM penalty_duels WHERE id = ? AND player_id = ? AND finished = 0 FOR UPDATE',
+        'SELECT * FROM penalty_duels WHERE id = ? AND (player_id = ? OR opponent_id = ?) AND finished = 0 FOR UPDATE',
         Number(req.params.id) || 0,
+        req.playerId,
         req.playerId,
       );
       if (!row) fail('Ten pojedynek już się zakończył.');
       const st = JSON.parse(row.state);
-      const status = G.penaltyStatus(st);
-      const me = await loadPlayer(req.playerId);
-      const opp = await db.get('SELECT * FROM players WHERE id = ?', row.opponent_id);
-      const myStats = await effStats(me);
-      const oppStats = await effStats(opp);
-      const rand = G.rng(Number(row.seed) + st.kicks.length * 7919);
-      // po czasie na decyzję ruch przepada (strzał obok / bramkarz w środku)
-      const late = st.turnAt && now() > st.turnAt + G.PENALTY_DECIDE_MS + G.PENALTY_GRACE_MS;
-      const target = late || req.body.timeout ? G.timeoutMove(status.turn) : clampKick(req.body);
-      let kick;
-      if (status.turn === 'shoot') {
-        const ball = { ...target }; // strzał gracza leci dokładnie tam, gdzie wskazał
-        const dive = G.aiDive(rand);
-        kick = { side: 'my', target, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(oppStats), G.shooterSkill(myStats)) };
-        st.my.push(kick.result);
-      } else {
-        const aim = G.aiAim(rand);
-        const ball = G.ballLanding(aim, G.shooterSkill(oppStats), rand);
-        kick = { side: 'op', target: aim, ball, dive: target, result: G.resolveKick(ball, target, G.keeperSkill(myStats), G.shooterSkill(oppStats)) };
-        st.op.push(kick.result);
+      const view = await duelView(row, req.playerId);
+      const role = view.status.turn === 'shoot' ? 'shoot' : 'dive';
+      if (!view.status.turn) fail('Pojedynek się zakończył.');
+      if (!st.pending[role]) {
+        const late = now() > deadlineOf(st);
+        st.pending[role] = late || req.body.timeout ? G.timeoutMove(role === 'shoot' ? 'shoot' : 'save') : clampKick(req.body);
+        if ((late || req.body.timeout) && role === 'shoot') st.pending[role].timeout = true;
       }
-      st.kicks.push(kick);
-      st.turnAt = now();
-      const after = G.penaltyStatus(st);
-      let reward = null;
-      if (after.finished) {
-        const events = st.kicks.map((k, i) => ({
-          minute: i + 1,
-          side: k.side === 'my' ? 0 : 1,
-          type: k.result === 'goal' ? 'goal' : k.result === 'save' ? 'save' : 'miss',
-          text: KICK_TEXT[k.result](k.side === 'my' ? me.name : opp.name),
-        }));
-        const r = await db.run(
-          `INSERT INTO matches (kind, home_id, away_id, home_name, away_name, home_score, away_score, events, created_at)
-           VALUES ('duel', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-          me.id,
-          opp.id,
-          me.name,
-          opp.name,
-          after.me,
-          after.op,
-          JSON.stringify({ penalty: true, events }),
-          now(),
-        );
-        const oppRes = after.result === 'win' ? 'loss' : after.result === 'loss' ? 'win' : 'draw';
-        const myRew = G.duelRewards(after.result, me.ovr);
-        const oppRew = G.duelRewards(oppRes, opp.ovr);
-        const settle = (id, money, res, goals) =>
-          db.run(
-            `UPDATE players SET money = money + ?, ${RESULT_COL[res]} = ${RESULT_COL[res]} + 1, goals = goals + ? WHERE id = ?`,
-            money,
-            goals,
-            id,
-          );
-        await settle(me.id, myRew.money, after.result, after.me);
-        await settle(opp.id, Math.floor(oppRew.money / 2), oppRes, after.op);
-        await notify(opp.id, `${me.name} wyzwał Cię na pojedynek karnych. Wynik: ${after.me}:${after.op}.`);
-        reward = { money: myRew.money, matchId: r.rows[0].id };
-      }
-      await db.run(
-        'UPDATE penalty_duels SET state = ?, finished = ? WHERE id = ?',
-        JSON.stringify(st),
-        after.finished ? 1 : 0,
-        row.id,
-      );
-      return { kick, status: after, my: st.my, op: st.op, reward };
+      await resolveTurn(row, st);
+      await saveState(row, st);
+      return { duel: await duelView(row, req.playerId) };
     }),
+  );
+
+  // Moje wyniki w pojedynkach (osobno od rankingu OVR) i ostatnie mecze.
+  app.get(
+    '/api/pvp/stats',
+    needPlayer,
+    route(async (req) => {
+      const p = await db.get('SELECT pk_played, pk_wins, pk_losses, pk_goals, pk_conceded FROM players WHERE id = ?', req.playerId);
+      const recent = await db.all(
+        `SELECT ${matchCols} FROM matches WHERE kind = 'penalty' AND (home_id = ? OR away_id = ?) ORDER BY id DESC LIMIT 8`,
+        req.playerId,
+        req.playerId,
+      );
+      const rank = (await db.get('SELECT COUNT(*) AS n FROM players WHERE pk_wins > (SELECT pk_wins FROM players WHERE id = ?)', req.playerId)).n + 1;
+      return { stats: { played: p.pk_played, wins: p.pk_wins, losses: p.pk_losses, goals: p.pk_goals, conceded: p.pk_conceded, rank }, recent };
+    }),
+  );
+
+  app.get(
+    '/api/ranking/penalty',
+    needPlayer,
+    route(async () => ({
+      players: (await db.all('SELECT * FROM players WHERE pk_played > 0 ORDER BY pk_wins DESC, pk_losses ASC LIMIT 200')).map((p) => ({
+        id: p.id, name: p.name, position: p.position, ovr: p.ovr, played: p.pk_played, wins: p.pk_wins, losses: p.pk_losses, goals: p.pk_goals,
+      })),
+    })),
   );
 
   app.get(
