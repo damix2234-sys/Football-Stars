@@ -145,7 +145,10 @@ window.addEventListener('hashchange', render);
 
 // Strona startowa dla niezalogowanych: baner z postaciami, panel logowania/rejestracji,
 // liczby z gry, liderzy rankingu i opis rozgrywki.
-const IMG = (name) => (window.FS_ASSETS && window.FS_ASSETS[name]) || `img/${name}.jpg`;
+const IMG = (name) => `img/${name}.jpg`;
+// Portret piłkarza: bramkarka dla bramkarzy, napastnik dla pozostałych pozycji.
+const avatar = (p, size = '') =>
+  `<img class="avatar ${size}" src="${IMG(p.position === 'BR' ? 'avatar-gk' : 'avatar-st')}" alt="">`;
 
 async function viewAuth(startMode = 'register') {
   let mode = startMode;
@@ -342,7 +345,7 @@ async function viewHome() {
   const e = liveEnergy(p);
   const dailyReady = now() >= p.dailyReadyAt;
   view.innerHTML = `
-    <h1>${esc(p.name)} <span class="tag">${CFG.positions[p.position]}</span></h1>
+    <div class="hero-head">${avatar(p, 'lg')}<div><h1>${esc(p.name)}</h1><span class="tag">${CFG.positions[p.position]}</span> <span class="tag">Poziom ${p.level}</span></div></div>
     <div class="grid">
       <div class="card">
         <h3>Profil</h3>
@@ -445,7 +448,7 @@ async function viewDuels() {
           <tr><th>Piłkarz</th><th>Poz.</th><th>Ocena</th><th></th></tr>
           ${opponents
             .map(
-              (o) => `<tr><td><span class="dot ${o.online ? 'on' : ''}"></span><a href="#gracz-${o.id}">${esc(o.name)}</a>
+              (o) => `<tr><td class="who">${avatar(o, 'sm')}<span class="dot ${o.online ? 'on' : ''}"></span><a href="#gracz-${o.id}">${esc(o.name)}</a>
                 <span class="tag">${o.position}</span></td><td>${o.level}</td><td>${o.overall}</td>
                 <td><button class="small" data-o="${o.id}">Wyzwij</button></td></tr>`,
             )
@@ -507,7 +510,7 @@ async function viewMatch(id) {
 async function viewPlayer(id) {
   const { player: p, matches } = await api('/players/' + id);
   view.innerHTML = `
-    <h1><span class="dot ${p.online ? 'on' : ''}"></span>${esc(p.name)} <span class="tag">${CFG.positions[p.position]}</span></h1>
+    <div class="hero-head">${avatar(p, 'lg')}<div><h1><span class="dot ${p.online ? 'on' : ''}"></span>${esc(p.name)}</h1><span class="tag">${CFG.positions[p.position]}</span> <span class="tag">Poziom ${p.level}</span></div></div>
     <div class="grid">
       <div class="card">
         <h3>Profil</h3>
@@ -628,7 +631,7 @@ async function viewClub(id) {
           <tr><th>Piłkarz</th><th>Poz.</th><th>Ocena</th>${d.isOwner ? '<th></th>' : ''}</tr>
           ${d.members
             .map(
-              (m) => `<tr><td><span class="dot ${m.online ? 'on' : ''}"></span><a href="#gracz-${m.id}">${esc(m.name)}</a>
+              (m) => `<tr><td class="who">${avatar(m, 'sm')}<span class="dot ${m.online ? 'on' : ''}"></span><a href="#gracz-${m.id}">${esc(m.name)}</a>
                 ${m.id === c.ownerId ? '<span class="tag on">Prezes</span>' : ''} <span class="tag">${m.position}</span></td>
                 <td>${m.level}</td><td>${m.overall}</td>
                 ${d.isOwner ? `<td>${m.id !== p.id ? `<button class="small ghost" data-kick="${m.id}">Usuń</button>` : ''}</td>` : ''}</tr>`,
@@ -713,7 +716,7 @@ async function viewRanking(tab = 'gracze') {
           ? `<tr><th>#</th><th>Piłkarz</th><th>Klub</th><th>Poz.</th><th>Ocena</th><th>W/R/P</th></tr>
              ${data.players
                .map(
-                 (p, i) => `<tr><td>${i + 1}</td><td><a href="#gracz-${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
+                 (p, i) => `<tr><td>${i + 1}</td><td class="who">${avatar(p, 'sm')}<a href="#gracz-${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
                  <td>${p.club ? `[${esc(p.club.tag)}]` : '–'}</td><td>${p.level}</td><td>${p.overall}</td><td>${p.wins}/${p.draws}/${p.losses}</td></tr>`,
                )
                .join('')}`

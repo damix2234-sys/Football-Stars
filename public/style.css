@@ -6,6 +6,8 @@
   --text: #eaf5ec;
   --muted: #8fa797;
   --deep: #03140a;
+  --glass: #0e1a13e6;
+  --purple: #8f3fd6;
   --font-display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
   --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --accent: #b6f23a;
@@ -42,7 +44,7 @@ main { padding-block: 24px; padding-left: max(24px, env(safe-area-inset-left, 0p
 #app.guest main { margin: 0; max-width: none; padding: 0; }
 
 .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+.card { background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
 .muted { color: var(--muted); }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .spread { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -190,3 +192,17 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
   .l-lead { animation-delay: .08s; } .l-auth { animation-delay: .16s; }
 }
 @keyframes rise { from { opacity: .001; transform: translateY(10px); } }
+
+/* ---------- tło gry i portrety ---------- */
+#app:not(.guest) { background: linear-gradient(90deg, var(--bg) 0%, #070d09eb 38%, #070d09a6 68%, #070d0966 100%), url("img/hero.jpg") right bottom / auto calc(100vh - 40px) no-repeat fixed, var(--bg); }
+#app:not(.guest) .nav, #app:not(.guest) .topbar { background: #0e1a13d9; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.hero-head { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+.hero-head h1 { margin: 0 0 6px; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid var(--accent); background: var(--panel-2); flex: none; }
+.avatar.lg { width: 84px; height: 84px; border-radius: 18px; box-shadow: 0 0 0 4px #b6f23a22, 0 0 28px #7fe25a55; }
+@media (max-width: 760px) {
+  #app:not(.guest) { background: linear-gradient(180deg, #070d0999 0%, #070d09d9 220px, var(--bg) 420px), url("img/hero.jpg") 70% top / auto 440px no-repeat, var(--bg); }
+  .avatar.lg { width: 68px; height: 68px; }
+}
+.avatar.sm { width: 28px; height: 28px; border-width: 1px; margin-right: 8px; vertical-align: middle; }
+td.who { white-space: nowrap; }
