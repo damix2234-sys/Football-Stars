@@ -78,6 +78,17 @@ const SCHEMA = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS clubs_name ON clubs (lower(name));
 
+  CREATE TABLE IF NOT EXISTS penalty_duels (
+    id SERIAL PRIMARY KEY,
+    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    opponent_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    seed BIGINT NOT NULL,
+    state TEXT NOT NULL,
+    finished INTEGER NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS penalty_active ON penalty_duels (player_id, finished);
+
   CREATE TABLE IF NOT EXISTS club_applications (
     club_id INTEGER NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
     player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,

@@ -4,10 +4,10 @@ import * as G from '../server/game.js';
 import { openDb } from '../server/db.js';
 import { createApp } from '../server/app.js';
 
-test('energia regeneruje się w czasie i nie przekracza maksimum', () => {
+test('energia regeneruje się w czasie bez limitu', () => {
   const t0 = 1_000_000;
   assert.equal(G.currentEnergy(50, t0, t0 + G.ENERGY_REGEN_MS * 3).energy, 53);
-  assert.equal(G.currentEnergy(G.ENERGY_MAX - 5, t0, t0 + G.ENERGY_REGEN_MS * 100).energy, G.ENERGY_MAX);
+  assert.equal(G.currentEnergy(500, t0, t0 + G.ENERGY_REGEN_MS * 100).energy, 600); // bez limitu
   assert.equal(G.currentEnergy(50, t0, t0 + G.ENERGY_REGEN_MS - 1).energy, 50);
 });
 
@@ -25,6 +25,24 @@ test('trening podnosi poziom specjalizacji, a plan automatu pilnuje budżetu', (
   const s = G.startingSkills('NAP');
   assert.equal(G.ovr(s), G.SPEC_KEYS.reduce((a, k) => a + s[k], 0));
   assert.equal(G.categoryOvr(s, 'atak'), s.wykonczenie + s.drybling);
+});
+
+test('karne: lepszy strzelec trafia częściej, seria kończy się poprawnie', () => {
+  const r = G.rng(1);
+  const rate = (shooter) => {
+    let g = 0;
+    for (let i = 0; i < 2000; i++) {
+      const ball = G.ballLanding({ x: 0.7, y: 0.5 }, shooter, r);
+      if (G.resolveKick(ball, { x: -0.7, y: 0.5 }, 20) === 'goal') g++;
+    }
+    return g;
+  };
+  assert.ok(rate(200) > rate(10), 'celność rośnie z wykończeniem');
+  assert.equal(G.resolveKick({ x: 1.2, y: 0.5 }, { x: 0, y: 0.5 }, 20), 'miss');
+  assert.equal(G.resolveKick({ x: 0, y: 0.5 }, { x: 0, y: 0.5 }, 20), 'save');
+  assert.deepEqual(G.penaltyStatus({ my: ['goal', 'goal', 'goal'], op: ['save', 'save', 'save'] }).result, 'win');
+  assert.equal(G.penaltyStatus({ my: Array(5).fill('goal'), op: Array(5).fill('goal') }).finished, false); // dogrywka
+  assert.equal(G.penaltyStatus({ my: Array(5).fill('goal'), op: Array(4).fill('goal') }).turn, 'save');
 });
 
 test('symulacja jest deterministyczna i lepszy zawodnik zwykle wygrywa', () => {
@@ -75,7 +93,7 @@ function client(base) {
   };
 }
 
-test('pełny przebieg: rejestracja, trening, mecz, klub', async () => {
+test('pełny przebieg: rejestracja, trening, pojedynek karnych, klub', async () => {
   await withServer(async (base, clock) => {
     const a = client(base);
     const b = client(base);
@@ -85,14 +103,14 @@ test('pełny przebieg: rejestracja, trening, mecz, klub', async () => {
       assert.equal((await cl('/player', { name: n + ' Testowy', position: pos })).status, 200);
     }
     const me = (await a('/me')).data.player;
-    assert.equal(me.energy, G.ENERGY_MAX);
+    assert.equal(me.energy, G.START_ENERGY);
     assert.equal(me.ovr, G.ovr(G.startingSkills('NAP')));
 
     // trening ręczny + przerwa 5 s
     const tr = await a('/train', { spec: 'wykonczenie' });
     assert.equal(tr.status, 200, JSON.stringify(tr.data));
     const cost = G.trainCost(me.training.specs.wykonczenie.level);
-    assert.equal((await a('/me')).data.player.energy, G.ENERGY_MAX - cost.energy);
+    assert.equal((await a('/me')).data.player.energy, G.START_ENERGY - cost.energy);
     assert.equal((await a('/train', { spec: 'wykonczenie' })).status, 400); // za szybko
     clock.t += G.TRAIN_COOLDOWN_MS;
     assert.equal((await a('/train', { spec: 'wykonczenie' })).status, 200);
@@ -115,19 +133,28 @@ test('pełny przebieg: rejestracja, trening, mecz, klub', async () => {
     assert.equal(afterCancel.training.autos.length, 0);
 
     const bId = (await b('/me')).data.player.id;
-    const duel = await a('/duel', { opponentId: bId });
-    assert.equal(duel.status, 200, JSON.stringify(duel.data));
-    const match = await a('/matches/' + duel.data.matchId);
-    assert.ok(match.data.match.events.length > 0);
-
-    // klub: Adam potrzebuje 500 monet – dostaje je z premii i sparingów
-    await a('/daily-bonus', {});
-    let money = (await a('/me')).data.player.money;
-    while (money < 500) {
-      const r = await a('/duel', { opponentId: bId });
-      if (r.status !== 200) clock.t += 3600e3;
-      money = (await a('/me')).data.player.money;
-    }
+    // pojedynek karnych: strzelamy i bronimy na zmianę aż do rozstrzygnięcia
+    const moneyBefore = (await a('/me')).data.player.money;
+    const start = await a('/penalty/start', { opponentId: bId });
+    assert.equal(start.status, 200, JSON.stringify(start.data));
+    const duelId = start.data.duel.id;
+    assert.equal(start.data.duel.status.turn, 'shoot');
+    // ponowny start zwraca ten sam, niedokończony pojedynek
+    assert.equal((await a('/penalty/start', { opponentId: bId })).data.duel.id, duelId);
+    let res;
+    let guard = 0;
+    do {
+      res = await a(`/penalty/${duelId}/kick`, { x: guard % 2 ? -0.7 : 0.7, y: 0.4 });
+      assert.equal(res.status, 200, JSON.stringify(res.data));
+      assert.ok(['goal', 'save', 'miss'].includes(res.data.kick.result));
+    } while (!res.data.status.finished && ++guard < 40);
+    assert.ok(res.data.status.finished, 'seria musi się zakończyć');
+    assert.ok(res.data.reward.money > 0);
+    assert.equal((await a(`/penalty/${duelId}/kick`, { x: 0, y: 0.5 })).status, 400); // po końcu
+    const match = await a('/matches/' + res.data.reward.matchId);
+    assert.ok(match.data.match.penalty && match.data.match.events.length >= 6);
+    assert.equal((await a('/penalty/current')).data.duel, null);
+    assert.ok((await a('/me')).data.player.money > moneyBefore);
     const club = await a('/clubs', { name: 'Orły Testowe', tag: 'ORL' });
     assert.equal(club.status, 200, JSON.stringify(club.data));
     const clubId = club.data.clubId;
@@ -158,12 +185,6 @@ test('pełny przebieg: rejestracja, trening, mecz, klub', async () => {
       others.push(cl);
     }
     const [d, e, f] = others;
-    await d('/daily-bonus', {});
-    let dm = (await d('/me')).data.player.money;
-    while (dm < 500) {
-      if ((await d('/duel', { opponentId: e.id })).status !== 200) clock.t += 3600e3;
-      dm = (await d('/me')).data.player.money;
-    }
     const club2 = await d('/clubs', { name: 'Rywale FC', tag: 'RYW' });
     assert.equal(club2.status, 200, JSON.stringify(club2.data));
     for (const cl of [e, f]) {

@@ -68,12 +68,11 @@ async function refreshMe() {
 }
 const now = () => Date.now() + serverOffset;
 
+// Energia nie ma limitu: odnawia się cały czas.
 function liveEnergy(p) {
-  if (p.energy >= CFG.energyMax) return { energy: p.energy, next: 0 };
-  const ticks = Math.floor((now() - p.energyUpdated) / CFG.energyRegenMs);
-  const energy = Math.min(CFG.energyMax, p.energy + Math.max(0, ticks));
-  const next = energy >= CFG.energyMax ? 0 : p.energyUpdated + (Math.max(0, ticks) + 1) * CFG.energyRegenMs - now();
-  return { energy, next };
+  const ticks = Math.max(0, Math.floor((now() - p.energyUpdated) / CFG.energyRegenMs));
+  const next = p.energyUpdated + (ticks + 1) * CFG.energyRegenMs - now();
+  return { energy: p.energy + ticks, next };
 }
 const mmss = (ms) => {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -91,20 +90,26 @@ function renderHud() {
   $('#nav').hidden = !logged;
   if (!logged) return;
   const e = liveEnergy(p);
+  $('#me-chip').innerHTML = `
+    <span class="me-ava">${avatar(p)}</span>
+    <span class="me-info"><b class="me-nick">${esc(p.name)}</b>
+      <span class="me-form" title="Forma: sprawność piłkarza (zmęczenie, kontuzje)"><i style="width:${p.form}%"></i></span>
+      <small>Forma ${p.form}%</small></span>
+    <span class="ovr-shield" title="OVR: suma wytrenowanych umiejętności"><small>OVR</small><b>${p.ovr}</b></span>`;
   $('#hud').innerHTML = `
-    <span class="pill ovr-pill" title="OVR – suma wytrenowanych umiejętności">OVR <b>${p.ovr}</b></span>
-    <span class="pill">⚡ ${e.energy}/${CFG.energyMax}${e.next ? ` <span class="muted">(${mmss(e.next)})</span>` : ''}</span>
+    <span class="pill" title="Energia (+1 co ${CFG.energyRegenMs / 1000} s)">⚡ ${fmt(e.energy)} <span class="muted">+1 za ${Math.ceil(e.next / 1000)} s</span></span>
     <span class="pill">💰 ${fmt(p.money)}</span>
-    <button class="ghost small" id="logout">Wyloguj</button>`;
-  $('#logout').onclick = async () => {
-    await api('/logout', {});
-    ME = null;
-    location.hash = '#';
-    boot();
-  };
+    <button class="ghost small" id="logout" title="Wyloguj">Wyloguj</button>`;
+  $('#logout').onclick = logout;
   const badge = $('#badge');
   badge.hidden = !p.unread;
   badge.textContent = p.unread;
+}
+async function logout() {
+  await api('/logout', {});
+  ME = null;
+  location.hash = '#';
+  boot();
 }
 setInterval(() => ME?.player && renderHud(), 1000);
 
@@ -112,7 +117,7 @@ setInterval(() => ME?.player && renderHud(), 1000);
 const routes = {
   '': viewHome,
   trening: viewTraining,
-  sparingi: viewDuels,
+  pojedynki: viewDuels,
   sklep: viewShop,
   klub: viewClub,
   kluby: viewClubs,
@@ -157,7 +162,7 @@ async function viewAuth(startMode = 'register') {
   try {
     [stats, top, { matches: recent }] = await Promise.all([api('/public/stats'), api('/public/top'), api('/public/recent')]);
   } catch {}
-  const n = (v) => (v == null ? '–' : fmt(v));
+  const n = (v) => (v == null ? '0' : fmt(v));
 
   view.innerHTML = `
   <div class="landing">
@@ -205,7 +210,7 @@ async function viewAuth(startMode = 'register') {
     }
 
     <ul class="l-ticks">
-      <li>Gra wieloosobowa – prawdziwi rywale i drużyny</li>
+      <li>Gra wieloosobowa z prawdziwymi rywalami i drużynami</li>
       <li>Działa na telefonie i komputerze, bez instalacji</li>
       <li>Proste zasady, dużo emocji w każdym meczu</li>
     </ul>
@@ -253,7 +258,7 @@ async function viewAuth(startMode = 'register') {
         <article class="l-feature">
           <img src="${IMG('match')}" alt="Napastnik oddający mocny strzał" loading="lazy">
           <div><h3>Wygrywaj mecze</h3>
-          <p>Wyzwij innego gracza na sparing i śledź relację minuta po minucie.
+          <p>Wyzwij innego gracza na pojedynek rzutów karnych. Strzelasz i bronisz na zmianę.
             O wyniku decydują statystyki, forma i odrobina szczęścia.</p></div>
         </article>
         <article class="l-feature">
@@ -270,7 +275,7 @@ async function viewAuth(startMode = 'register') {
       <ol class="l-steps">
         <li><b>Załóż konto</b><span>Wystarczy login i hasło.</span></li>
         <li><b>Stwórz piłkarza</b><span>Wybierz nazwę i pozycję na boisku.</span></li>
-        <li><b>Graj</b><span>Trenuj, rozgrywaj sparingi i szukaj klubu.</span></li>
+        <li><b>Graj</b><span>Trenuj, wygrywaj pojedynki i szukaj klubu.</span></li>
       </ol>
       <div class="l-final"><button class="l-cta" data-goto="register">Zagraj za darmo</button></div>
     </section>
@@ -286,7 +291,7 @@ async function viewAuth(startMode = 'register') {
     $('#f-pass').autocomplete = m === 'login' ? 'current-password' : 'new-password';
     $('#f-submit').textContent = m === 'login' ? 'Zaloguj się' : 'Załóż darmowe konto';
     $('#f-note').textContent =
-      m === 'login' ? 'Nie masz konta? Wybierz „Załóż konto”.' : 'Login: 3–20 znaków. Hasło: min. 6 znaków.';
+      m === 'login' ? 'Nie masz konta? Wybierz „Załóż konto”.' : 'Login: od 3 do 20 znaków. Hasło: co najmniej 6 znaków.';
   };
   setMode(mode);
   view.querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => setMode(b.dataset.m)));
@@ -417,11 +422,10 @@ async function viewHome() {
     <div class="grid">
       <div class="card">
         <h3>Profil</h3>
-        <p>OVR <b>${p.ovr}</b> · z ekwipunkiem <b>${p.overall}</b></p>
-        <p class="muted" style="margin:12px 0 4px">Energia ${e.energy}/${CFG.energyMax}</p>
-        <div class="bar energy"><div style="width:${(e.energy / CFG.energyMax) * 100}%"></div></div>
-        <p style="margin-top:12px">Klub: ${p.club ? `<a href="#klub">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : '<a href="#kluby">brak – znajdź klub</a>'}</p>
+        <p>Umiejętności z ekwipunkiem: <b>${p.overall}</b></p>
+        <p style="margin-top:12px">Klub: ${p.club ? `<a href="#klub">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : '<a href="#kluby">brak, znajdź klub</a>'}</p>
         <p>Bilans: <b>${p.wins}</b>W · <b>${p.draws}</b>R · <b>${p.losses}</b>P · ⚽ ${p.goals}</p>
+        <button class="ghost small" id="logout2">Wyloguj</button>
       </div>
       <div class="card">
         <h3>Statystyki</h3>
@@ -434,7 +438,7 @@ async function viewHome() {
         <h3 style="margin-top:20px">Co dalej?</h3>
         <div class="row">
           <a class="btn" href="#trening">Trenuj</a>
-          <a class="btn" href="#sparingi">Zagraj sparing</a>
+          <a class="btn" href="#pojedynki">Pojedynek karnych</a>
         </div>
       </div>
       ${window.FS_API ? `<div class="card">
@@ -448,6 +452,7 @@ async function viewHome() {
       </div>` : ""}
     </div>`;
   $('#daily').onclick = () => act('/daily-bonus');
+  $('#logout2').onclick = logout;
   if (window.FS_API) {
     $('#pvEnergy').onclick = () => act('/preview/refill');
     $('#pvMoney').onclick = () => act('/preview/money');
@@ -483,10 +488,8 @@ async function viewTraining(catId) {
   const head = `
     <div class="t-top">
       <div><h1>${cat ? `<a class="t-back" href="#trening">${icon('arrow_back')}</a> ${cat.name}` : 'Trening'}</h1>
-        <p class="muted">${cat ? 'Trenuj specjalizacje – razem dają OVR kategorii.' : 'Wybierz kategorię i trenuj jej specjalizacje. Suma wszystkich to Twój OVR.'}</p></div>
+        <p class="muted">${cat ? 'Trenuj specjalizacje. Razem dają OVR kategorii.' : 'Wybierz kategorię i trenuj jej specjalizacje. Suma wszystkich to Twój OVR.'}</p></div>
       <div class="t-sum">
-        <span class="t-chip">OVR <b>${p.ovr}</b></span>
-        <span class="t-chip">${icon('bolt', 'sm')} ${liveEnergy(p).energy}/${CFG.energyMax}</span>
         <span class="t-chip">${icon('schedule', 'sm')} Automaty ${activeAutos}/${CFG.autoMaxActive}</span>
       </div>
     </div>`;
@@ -612,20 +615,20 @@ async function viewTraining(catId) {
   });
 }
 
-// Panel treningu automatycznego: wybór czasu, wyliczenie kosztów i start.
+// Panel treningu automatycznego: wybór czasu i dokładne wyliczenie kosztów oraz efektu.
 function autoPanel(spec) {
   const s = CFG.categories.flatMap((c) => c.specs.map((x) => ({ ...x, color: c.color }))).find((x) => x.id === spec);
-  const options = [0.25, 0.5, 1, 2, 4, 8].filter((h) => h <= CFG.autoMaxHours);
-  let hours = 1;
+  const st = ME.player.training.specs[spec];
+  const options = [1 / 12, 0.25, 0.5, 1, 2, 4, 8].filter((h) => h <= CFG.autoMaxHours);
+  let hours = 1 / 12;
   const wrap = document.createElement('div');
   wrap.className = 'modal-wrap';
   wrap.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true" style="--c:${s.color}">
       <div class="row" style="gap:12px"><span class="orb">${icon(s.icon)}</span>
-        <div><h2 style="margin:0">Trening automatyczny</h2><span class="muted">${s.name}</span></div></div>
-      <p class="muted">Ustaw, jak długo trenować. Trening wykonuje się co 5 sekund, także gdy nie ma Cię w grze. Koszt pobierany jest z góry – anulowanie zwraca koszt niewykonanych treningów.</p>
+        <div><h2 style="margin:0">Trening automatyczny</h2><span class="muted">${s.name} · poziom ${st.level}</span></div></div>
+      <p class="muted">Wybierz, jak długo trenować. Jeden trening co 5 sekund, także gdy nie ma Cię w grze. Koszt pobieramy od razu, a anulowanie zwraca koszt treningów, które się nie odbyły.</p>
       <div class="hours">${options.map((h) => `<button class="hbtn" data-h="${h}">${hoursLabel(h)}</button>`).join('')}</div>
-      <input id="auto-range" type="range" min="0.25" max="${CFG.autoMaxHours}" step="0.25" value="1" aria-label="Czas treningu w godzinach">
       <div class="plan" id="plan">Liczę…</div>
       <div class="row" style="justify-content:flex-end">
         <button class="ghost" id="auto-close">Zamknij</button>
@@ -636,35 +639,35 @@ function autoPanel(spec) {
   const close = () => wrap.remove();
   wrap.addEventListener('click', (e) => e.target === wrap && close());
   wrap.querySelector('#auto-close').onclick = close;
-  const range = wrap.querySelector('#auto-range');
   let req = 0;
   const update = async () => {
     wrap.querySelectorAll('.hbtn').forEach((b) => b.classList.toggle('on', Number(b.dataset.h) === hours));
-    range.value = hours;
     const id = ++req;
     try {
       const plan = await api('/auto/plan', { spec, hours });
       if (id !== req) return;
-      const why = { time: 'wybrany czas', energy: 'energia', money: 'monety' }[plan.limit];
+      const full = plan.count >= plan.slots;
+      const short = !full && plan.count > 0;
+      const reason = plan.limit === 'money' ? 'monet' : 'energii';
       wrap.querySelector('#plan').innerHTML = plan.count
         ? `<div class="plan-grid">
             <div><b>${plan.count}</b><span>treningów</span></div>
-            <div><b>+${plan.levels}</b><span>poziomów</span></div>
+            <div><b>+${plan.levels}</b><span>pkt ${s.name}</span></div>
             <div><b>${fmt(plan.money)}</b><span>monet</span></div>
-            <div><b>${plan.energy}</b><span>energii</span></div>
+            <div><b>${fmt(plan.energy)}</b><span>energii</span></div>
           </div>
-          <p class="muted">Potrwa ${Math.ceil(plan.durationMs / 60000)} min (koniec ok. ${clock(now() + plan.durationMs)}). Ogranicza Cię: <b>${why}</b>.</p>`
-        : `<p class="err-text">Nie stać Cię nawet na jeden trening – zdobądź monety albo poczekaj na energię.</p>`;
+          <p class="plan-line">${s.name}: poziom <b>${st.level}</b> → <b>${st.level + plan.levels}</b></p>
+          <p class="muted">W ${hoursLabel(hours)} mieści się do ${fmt(plan.slots)} treningów.
+            ${full ? `Stać Cię na wszystkie, koniec ok. ${clock(now() + plan.durationMs)}.`
+              : `Stać Cię na ${plan.count}, więc trening potrwa ${Math.ceil(plan.durationMs / 60000)} min (koniec ok. ${clock(now() + plan.durationMs)}).`}</p>
+          ${short ? `<p class="warn-text">Na pełne ${hoursLabel(hours)} brakuje Ci ${reason}.</p>` : ''}`
+        : `<p class="err-text">Nie stać Cię nawet na jeden trening. Zdobądź monety albo poczekaj na energię.</p>`;
       wrap.querySelector('#auto-go').disabled = !plan.count;
     } catch (e) {
       wrap.querySelector('#plan').textContent = e.message;
     }
   };
   wrap.querySelectorAll('.hbtn').forEach((b) => (b.onclick = () => ((hours = Number(b.dataset.h)), update())));
-  range.oninput = () => {
-    hours = Number(range.value);
-    update();
-  };
   wrap.querySelector('#auto-go').onclick = async () => {
     const r = await act('/auto/start', { spec, hours });
     if (r) close();
@@ -679,16 +682,22 @@ function matchRow(m, perspectiveId) {
   const res = my > their ? 'W' : my < their ? 'P' : 'R';
   const color = res === 'W' ? 'var(--accent)' : res === 'P' ? 'var(--danger)' : 'var(--muted)';
   return `<tr><td><b style="color:${color}">${res}</b></td>
-    <td>${esc(m.home_name)} – ${esc(m.away_name)}</td><td><b>${m.home_score}:${m.away_score}</b></td>
+    <td>${esc(m.home_name)} vs ${esc(m.away_name)}</td><td><b>${m.home_score}:${m.away_score}</b></td>
     <td class="muted">${time(m.created_at)}</td><td><a href="#mecz-${m.id}">Relacja</a></td></tr>`;
 }
 
-async function viewDuels() {
-  const [{ opponents }, { matches }] = await Promise.all([api('/opponents'), api('/my-matches')]);
+// ---------- pojedynki: rzuty karne ----------
+async function viewDuels(arg) {
+  if (arg === 'gra') return penaltyGame();
+  const [{ opponents }, { matches }, { duel }] = await Promise.all([api('/opponents'), api('/my-matches'), api('/penalty/current')]);
   const p = ME.player;
   view.innerHTML = `
-    <h1>Sparingi</h1>
-    <p class="muted">Wyzwij innego gracza o podobnym OVR na mecz jeden na jednego. Koszt: ${CFG.duelEnergy} energii.</p>
+    <div class="duel-hero">
+      <div><h1>Pojedynki</h1>
+        <p>Rzuty karne jeden na jednego. Najpierw strzelasz Ty, potem bronisz. Po ${CFG.penaltyKicks} strzałów wygrywa ten, kto trafił więcej razy, a przy remisie gramy dalej do pierwszej różnicy.</p>
+        <p class="muted">Wyzwanie kosztuje ${CFG.duelEnergy} energii. Wykończenie pomaga trafiać, a Refleks i Chwytanie bronić.</p></div>
+      ${duel ? `<a class="btn" href="#pojedynki-gra">Dokończ pojedynek z ${esc(duel.opponent.name)}</a>` : ''}
+    </div>
     <div class="grid">
       <div class="card">
         <h3>Rywale</h3>
@@ -700,29 +709,110 @@ async function viewDuels() {
                 <span class="tag">${o.position}</span></td><td><b>${o.ovr}</b></td>
                 <td><button class="small" data-o="${o.id}">Wyzwij</button></td></tr>`,
             )
-            .join('') || '<tr><td colspan="4" class="muted">Brak rywali w Twoim zasięgu. Zaproś znajomych!</td></tr>'}
+            .join('') || '<tr><td colspan="3" class="muted">Brak rywali w Twoim zasięgu. Zaproś znajomych!</td></tr>'}
         </table></div>
       </div>
       <div class="card">
-        <h3>Ostatnie mecze</h3>
+        <h3>Ostatnie pojedynki</h3>
         <div class="table-wrap"><table>${matches.map((m) => matchRow(m, p.id)).join('') || '<tr><td class="muted">Jeszcze nie grałeś.</td></tr>'}</table></div>
       </div>
     </div>`;
-  view.querySelectorAll('[data-o]').forEach(
-    (b) =>
-      (b.onclick = async () => {
-        b.disabled = true;
-        const r = await act('/duel', { opponentId: Number(b.dataset.o) }, { reload: false });
-        if (r) location.hash = `#mecz-${r.matchId}`;
-        else b.disabled = false;
-      }),
-  );
+  view.querySelectorAll('[data-o]').forEach((b) => (b.onclick = () => startDuel(Number(b.dataset.o), b)));
+}
+
+async function startDuel(opponentId, btn) {
+  if (btn) btn.disabled = true;
+  const r = await act('/penalty/start', { opponentId }, { reload: false });
+  if (r) location.hash = '#pojedynki-gra';
+  else if (btn) btn.disabled = false;
+}
+
+async function penaltyGame() {
+  const { duel } = await api('/penalty/current');
+  if (!duel) {
+    location.hash = '#pojedynki';
+    return;
+  }
+  const p = ME.player;
+  const opp = duel.opponent;
+  view.innerHTML = `
+    <div class="pk">
+      <div class="pk-board">
+        <div class="pk-side me">${avatar(p, 'sm')}<b>${esc(p.name)}</b><div class="pk-dots" id="dots-my"></div></div>
+        <div class="pk-score"><span id="sc-my">0</span><i>:</i><span id="sc-op">0</span></div>
+        <div class="pk-side op"><b>${esc(opp.name)}</b>${avatar(opp, 'sm')}<div class="pk-dots" id="dots-op"></div></div>
+      </div>
+      <div class="pk-stage">
+        <canvas id="pk-canvas" aria-label="Rzuty karne"></canvas>
+        <div class="pk-hint" id="pk-hint"></div>
+      </div>
+      <div class="pk-end" id="pk-end" hidden></div>
+    </div>`;
+  const scene = PenaltyScene($('#pk-canvas'));
+  let my = duel.my;
+  let op = duel.op;
+  const dots = (list, total) => {
+    const n = Math.max(total, list.length);
+    return Array.from({ length: n }, (_, i) => `<span class="pk-dot ${list[i] ? (list[i] === 'goal' ? 'g' : 'x') : ''}"></span>`).join('');
+  };
+  const paint = (status) => {
+    const total = Math.max(CFG.penaltyKicks, my.length, op.length);
+    $('#dots-my').innerHTML = dots(my, total);
+    $('#dots-op').innerHTML = dots(op, total);
+    $('#sc-my').textContent = status.me;
+    $('#sc-op').textContent = status.op;
+  };
+  const hint = (html) => ($('#pk-hint').innerHTML = html);
+  const next = (status) => {
+    paint(status);
+    if (status.finished) return;
+    if (status.turn === 'shoot') {
+      hint(`<b>Twój strzał.</b> Stuknij w bramkę tam, gdzie chcesz strzelić.`);
+      scene.wait('shoot', kick);
+    } else {
+      hint(`<b>Bronisz.</b> Stuknij w bramkę tam, gdzie rzuci się Twój bramkarz.`);
+      scene.wait('save', kick);
+    }
+  };
+  async function kick(target) {
+    hint('');
+    let r;
+    try {
+      r = await api(`/penalty/${duel.id}/kick`, target);
+    } catch (e) {
+      toast(e.message, true);
+      return next(statusNow());
+    }
+    await scene.play(r.kick);
+    my = r.my;
+    op = r.op;
+    if (r.status.finished) {
+      paint(r.status);
+      await refreshMe();
+      const res = r.status.result;
+      $('#pk-end').hidden = false;
+      $('#pk-end').innerHTML = `
+        <h2 class="pk-res ${res}">${res === 'win' ? 'Wygrana!' : res === 'loss' ? 'Porażka' : 'Remis'} ${r.status.me}:${r.status.op}</h2>
+        <p>Nagroda: <b>${fmt(r.reward.money)}</b> 💰</p>
+        <div class="row" style="justify-content:center">
+          <a class="btn" href="#mecz-${r.reward.matchId}">Zobacz przebieg</a>
+          <button class="ghost" id="pk-again">Rewanż</button>
+          <a class="btn ghost-link" href="#pojedynki">Inni rywale</a>
+        </div>`;
+      $('#pk-again').onclick = () => startDuel(opp.id);
+      hint('');
+      return;
+    }
+    next(r.status);
+  }
+  const statusNow = () => ({ me: my.filter((k) => k === 'goal').length, op: op.filter((k) => k === 'goal').length, turn: my.length === op.length ? 'shoot' : 'save', finished: false });
+  next(duel.status);
 }
 
 async function viewMatch(id) {
   const { match: m } = await api('/matches/' + id);
   view.innerHTML = `
-    <h1>${m.kind === 'club' ? 'Mecz klubowy' : 'Sparing'}</h1>
+    <h1>${m.kind === 'club' ? 'Mecz klubowy' : m.penalty ? 'Pojedynek karnych' : 'Mecz'}</h1>
     <div class="card">
       <div class="spread"><h2>${esc(m.home_name)}</h2><div class="score" id="sc">0:0</div><h2 style="text-align:right">${esc(m.away_name)}</h2></div>
       <p class="muted" style="text-align:center" id="min">Gwizdek!</p>
@@ -733,7 +823,7 @@ async function viewMatch(id) {
   let i = 0;
   const step = () => {
     if (i >= m.events.length) {
-      $('#min').textContent = 'Koniec meczu';
+      $('#min').textContent = m.penalty ? 'Koniec serii' : 'Koniec meczu';
       $('#sc').textContent = `${m.home_score}:${m.away_score}`;
       $('#skip').hidden = true;
       timers.forEach(clearInterval);
@@ -742,10 +832,10 @@ async function viewMatch(id) {
     const e = m.events[i++];
     if (e.type === 'goal') score[e.side]++;
     $('#sc').textContent = `${score[0]}:${score[1]}`;
-    $('#min').textContent = `${e.minute}'`;
+    $('#min').textContent = m.penalty ? `Strzał ${e.minute}` : `${e.minute}'`;
     $('#ev').insertAdjacentHTML(
       'beforeend',
-      `<li class="${e.type} ${e.side === 1 ? 'right' : ''}"><span class="min">${e.minute}'</span>${esc(e.text)}</li>`,
+      `<li class="${e.type} ${e.side === 1 ? 'right' : ''}"><span class="min">${m.penalty ? '#' + e.minute : e.minute + "'"}</span>${esc(e.text)}</li>`,
     );
   };
   timers.push(setInterval(step, 700));
@@ -765,17 +855,13 @@ async function viewPlayer(id) {
         <p>OVR <b>${p.ovr}</b> · z ekwipunkiem <b>${p.overall}</b></p>
         <p>Klub: ${p.club ? `<a href="#klub-${p.club.id}">[${esc(p.club.tag)}] ${esc(p.club.name)}</a>` : 'brak'}</p>
         <p>Bilans: <b>${p.wins}</b>W · <b>${p.draws}</b>R · <b>${p.losses}</b>P · ⚽ ${p.goals}</p>
-        ${p.id !== ME.player.id ? `<button id="duel">Wyzwij na sparing</button>` : ''}
+        ${p.id !== ME.player.id ? `<button id="duel">Wyzwij na pojedynek karnych</button>` : ''}
       </div>
       <div class="card"><h3>Statystyki</h3>${statsTable(p, false)}</div>
-      <div class="card"><h3>Ostatnie sparingi</h3><div class="table-wrap"><table>${matches.map((m) => matchRow(m, p.id)).join('') || '<tr><td class="muted">Brak meczów.</td></tr>'}</table></div></div>
+      <div class="card"><h3>Ostatnie pojedynki</h3><div class="table-wrap"><table>${matches.map((m) => matchRow(m, p.id)).join('') || '<tr><td class="muted">Brak meczów.</td></tr>'}</table></div></div>
     </div>`;
   const b = $('#duel');
-  if (b)
-    b.onclick = async () => {
-      const r = await act('/duel', { opponentId: p.id }, { reload: false });
-      if (r) location.hash = `#mecz-${r.matchId}`;
-    };
+  if (b) b.onclick = () => startDuel(p.id, b);
 }
 
 async function viewShop() {
@@ -830,7 +916,7 @@ async function viewClubs() {
         <p class="muted">Koszt: ${fmt(CFG.clubCreateCost)} monet. Zostaniesz prezesem.</p>
         <form id="f">
           <label>Nazwa klubu<input name="name" required maxlength="30"></label>
-          <label>Skrót (2–4 znaki)<input name="tag" required maxlength="4"></label>
+          <label>Skrót (od 2 do 4 znaków)<input name="tag" required maxlength="4"></label>
           <button>Załóż klub</button>
         </form>
       </div>`
@@ -965,7 +1051,7 @@ async function viewRanking(tab = 'gracze') {
              ${data.players
                .map(
                  (p, i) => `<tr><td>${i + 1}</td><td class="who">${avatar(p, 'sm')}<a href="#gracz-${p.id}">${esc(p.name)}</a> <span class="tag">${p.position}</span></td>
-                 <td>${p.club ? `[${esc(p.club.tag)}]` : '–'}</td><td><b>${p.ovr}</b></td><td>${p.wins}/${p.draws}/${p.losses}</td></tr>`,
+                 <td>${p.club ? `[${esc(p.club.tag)}]` : 'brak'}</td><td><b>${p.ovr}</b></td><td>${p.wins}/${p.draws}/${p.losses}</td></tr>`,
                )
                .join('')}`
           : `<tr><th>#</th><th>Klub</th><th>Członkowie</th><th>Pkt</th><th>W/R/P</th></tr>

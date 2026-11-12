@@ -1,9 +1,9 @@
 // Wersja podglądowa: ten sam interfejs co serwer (/api/...), ale cała gra działa
 // w przeglądarce, a pozostali gracze to boty. Wymaga obiektu G (server/game.js).
 (() => {
-  const KEY = 'football-stars-preview-v2';
+  const KEY = 'football-stars-preview-v3';
   const now = () => Date.now();
-  let S = null; // stan gry – wczytywany na końcu pliku, gdy wszystkie funkcje są gotowe
+  let S = null; // stan gry, wczytywany na końcu pliku, gdy wszystkie funkcje są gotowe
 
   function load() {
     try {
@@ -26,7 +26,7 @@
 
   // ---------- dane startowe: boty, kluby, czat ----------
   function seed() {
-    S = { seq: {}, users: [], session: null, players: [], inventory: [], clubs: [], apps: [], matches: [], messages: [], notifications: [], autos: [], botTick: now() };
+    S = { seq: {}, users: [], session: null, players: [], inventory: [], clubs: [], apps: [], matches: [], messages: [], notifications: [], autos: [], penalties: [], botTick: now() };
     const bots = [
       ['Marek Mur', 'OBR', 4], ['Tomek Rakieta', 'NAP', 6], ['Piotr Pajęczyna', 'BR', 5], ['Ola Rozgrywająca', 'POM', 3],
       ['Bartek Skała', 'OBR', 2], ['Zosia Zwinna', 'POM', 4], ['Kuba Kometa', 'NAP', 1], ['Igor Wieża', 'BR', 2],
@@ -53,7 +53,7 @@
       const bs = S.players.filter((p) => p.bot);
       const a = bs[Math.floor(Math.random() * bs.length)];
       const b = bs.filter((x) => x !== a)[Math.floor(Math.random() * (bs.length - 1))];
-      duel(a, b, now() - (6 - i) * 1800e3);
+      autoPenalty(a, b, now() - (6 - i) * 1800e3);
     }
     say(byName('Tomek Rakieta'), 'Siema wszystkim! Kto na mecz?', now() - 40 * 60000);
     say(byName('Ola Rozgrywająca'), 'Ja chętnie, tylko poczekam na energię ⚡', now() - 38 * 60000);
@@ -65,7 +65,7 @@
     const skills = G.startingSkills(position);
     const p = {
       id: nextId('player'), user_id: userId, name, position, skills, ovr: G.ovr(skills), money: G.START_MONEY,
-      energy: G.ENERGY_MAX, energy_updated: now(), training_progress: {}, last_train: 0, wins: 0, draws: 0, losses: 0, goals: 0,
+      energy: G.START_ENERGY, energy_updated: now(), training_progress: {}, last_train: 0, wins: 0, draws: 0, losses: 0, goals: 0,
       club_id: null, last_daily: 0, last_seen: now(), created_at: now(),
     };
     S.players.push(p);
@@ -117,7 +117,6 @@
 
   function spendEnergy(p, n) {
     if (p.energy < n) fail(`Za mało energii (potrzeba ${n}).`);
-    if (p.energy >= G.ENERGY_MAX) p.energy_updated = now();
     p.energy -= n;
   }
   function publicPlayer(p) {
@@ -137,22 +136,55 @@
   }
   const listMatch = ({ events, ...m }) => m;
 
-  function duel(me, opp, t = now()) {
-    const result = G.simulate(G.playerSide(me.name, effStats(me)), G.playerSide(opp.name, effStats(opp)), Math.floor(Math.random() * 2 ** 31));
-    const m = saveMatch('duel', me, opp, result, t);
-    const [gs, ga] = result.score;
-    const myRes = outcome(gs, ga);
-    const oppRes = outcome(ga, gs);
-    const myRew = G.duelRewards(myRes, me.ovr);
+  // ---------- pojedynki karnych ----------
+  const KICK_TEXT = {
+    goal: (who) => `${who} strzela i jest GOL!`,
+    save: (who) => `${who} strzela, ale bramkarz broni.`,
+    miss: (who) => `${who} strzela obok bramki.`,
+  };
+  // Jeden strzał w serii: gdy "my" strzelamy, cel podaje gracz; gdy bronimy, podaje miejsce rzutu.
+  function penaltyKick(st, me, opp, input) {
+    const status = G.penaltyStatus(st);
+    const rand = G.rng(st.seed + st.kicks.length * 7919);
+    let kick;
+    if (status.turn === 'shoot') {
+      const target = input || G.aiAim(rand);
+      const ball = G.ballLanding(target, G.shooterSkill(effStats(me)), rand);
+      const dive = G.aiDive(rand);
+      kick = { side: 'my', target, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(effStats(opp))) };
+      st.my.push(kick.result);
+    } else {
+      const aim = G.aiAim(rand);
+      const ball = G.ballLanding(aim, G.shooterSkill(effStats(opp)), rand);
+      const dive = input || G.aiDive(rand);
+      kick = { side: 'op', target: aim, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(effStats(me))) };
+      st.op.push(kick.result);
+    }
+    st.kicks.push(kick);
+    return kick;
+  }
+  function finishPenalty(st, me, opp, t = now()) {
+    const s = G.penaltyStatus(st);
+    const events = st.kicks.map((k, i) => ({
+      minute: i + 1, side: k.side === 'my' ? 0 : 1,
+      type: k.result === 'goal' ? 'goal' : k.result === 'save' ? 'save' : 'miss',
+      text: KICK_TEXT[k.result](k.side === 'my' ? me.name : opp.name),
+    }));
+    const m = { id: nextId('match'), kind: 'duel', penalty: true, home_id: me.id, away_id: opp.id, home_name: me.name, away_name: opp.name, home_score: s.me, away_score: s.op, events, created_at: t };
+    S.matches.push(m);
+    const oppRes = s.result === 'win' ? 'loss' : s.result === 'loss' ? 'win' : 'draw';
+    const myRew = G.duelRewards(s.result, me.ovr);
     const oppRew = G.duelRewards(oppRes, opp.ovr);
-    me.money += myRew.money;
-    me[COL[myRes]]++;
-    me.goals += gs;
-    opp.money += Math.floor(oppRew.money / 2);
-    opp[COL[oppRes]]++;
-    opp.goals += ga;
-    notify(opp.id, `${me.name} wyzwał Cię na mecz. Wynik: ${gs}:${ga}.`);
-    return { m, myRew };
+    me.money += myRew.money; me[COL[s.result]]++; me.goals += s.me;
+    opp.money += Math.floor(oppRew.money / 2); opp[COL[oppRes]]++; opp.goals += s.op;
+    notify(opp.id, `${me.name} wyzwał Cię na pojedynek karnych. Wynik: ${s.me}:${s.op}.`);
+    return { money: myRew.money, matchId: m.id };
+  }
+  // Pojedynek rozgrywany w całości przez AI (boty między sobą lub bot wyzywa gracza).
+  function autoPenalty(me, opp, t = now()) {
+    const st = { seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [] };
+    while (!G.penaltyStatus(st).finished) penaltyKick(st, me, opp, null);
+    return finishPenalty(st, me, opp, t);
   }
 
   function clubMatch(home, away, t = now()) {
@@ -174,7 +206,7 @@
       c[COL[res]]++;
       for (const x of tm.ms) {
         x.p.money += rew.money;
-        notify(x.p.id, `Mecz klubowy ${home.name} – ${away.name}: ${hs}:${as}.`);
+        notify(x.p.id, `Mecz klubowy ${home.name} vs ${away.name}: ${hs}:${as}.`);
       }
     };
     settle(home, h, outcome(hs, as));
@@ -201,7 +233,7 @@
       b.last_seen = S.botTick;
       const r = Math.random();
       if (r < 0.3) say(b, pick(BOT_LINES), S.botTick);
-      else if (r < 0.55 && me && G.inDuelRange(b.ovr, me.ovr)) duel(b, me, S.botTick);
+      else if (r < 0.55 && me && G.inDuelRange(b.ovr, me.ovr)) autoPenalty(b, me, S.botTick);
       else if (r < 0.8) {
         for (const k of G.SPEC_KEYS) if (Math.random() < 0.2) b.skills[k]++;
         b.ovr = G.ovr(b.skills);
@@ -235,7 +267,7 @@
 
   post('/register', (b) => {
     const login = String(b.login || '').trim();
-    if (!/^[\p{L}\d_]{3,20}$/u.test(login)) fail('Login: 3–20 znaków (litery, cyfry, _).');
+    if (!/^[\p{L}\d_]{3,20}$/u.test(login)) fail('Login musi mieć od 3 do 20 znaków (litery, cyfry, _).');
     if (String(b.password || '').length < 6) fail('Hasło musi mieć min. 6 znaków.');
     if (S.users.some((u) => u.login.toLowerCase() === login.toLowerCase())) fail('Login jest zajęty.');
     const u = { id: nextId('user'), login, password: String(b.password) };
@@ -264,16 +296,16 @@
     clubs: [...S.clubs].sort((a, b) => b.points - a.points || b.wins - a.wins).slice(0, 5).map(clubRow),
   }));
   get('/config', () => ({
-    positions: G.POSITIONS, stats: G.STATS, slots: G.SLOTS, items: G.ITEMS, energyMax: G.ENERGY_MAX,
+    positions: G.POSITIONS, stats: G.STATS, slots: G.SLOTS, items: G.ITEMS, 
     energyRegenMs: G.ENERGY_REGEN_MS, categories: G.CATEGORIES, trainCooldownMs: G.TRAIN_COOLDOWN_MS,
-    autoMaxHours: G.AUTO_MAX_HOURS, autoMaxActive: G.AUTO_MAX_ACTIVE, duelEnergy: G.DUEL_ENERGY,
+    autoMaxHours: G.AUTO_MAX_HOURS, autoMaxActive: G.AUTO_MAX_ACTIVE, duelEnergy: G.PENALTY_ENERGY, penaltyKicks: G.PENALTY_KICKS,
     clubCreateCost: G.CLUB_CREATE_COST, clubMaxMembers: G.CLUB_MAX_MEMBERS, duelOvrRatio: G.DUEL_OVR_RATIO,
   }));
   post('/player', (b) => {
     if (!S.session) fail('Zaloguj się.');
     if (S.players.some((p) => p.user_id === S.session)) fail('Masz już piłkarza.');
     const name = String(b.name || '').trim();
-    if (!/^[\p{L}][\p{L}\d .'-]{2,23}$/u.test(name)) fail('Nazwa piłkarza: 3–24 znaki, zaczyna się literą.');
+    if (!/^[\p{L}][\p{L}\d .'-]{2,23}$/u.test(name)) fail('Nazwa piłkarza musi mieć od 3 do 24 znaków i zaczynać się literą.');
     if (!G.POSITIONS[b.position]) fail('Wybierz pozycję.');
     if (S.players.some((p) => p.name.toLowerCase() === name.toLowerCase())) fail('Ta nazwa jest zajęta.');
     const p = makePlayer(S.session, name, b.position);
@@ -293,7 +325,7 @@
       player: {
         ...publicPlayer(p), baseStats: base,
         training: trainingState(p),
-        money: p.money, energy: p.energy, energyUpdated: p.energy_updated,
+        money: p.money, energy: p.energy, energyUpdated: p.energy_updated, form: 100,
         dailyReadyAt: p.last_daily + G.DAILY_BONUS_MS, dailyAmount: G.dailyBonusAmount(p.ovr),
         clubRole: c ? (c.owner_id === p.id ? 'owner' : 'member') : null,
         unread: S.notifications.filter((n) => n.player_id === p.id && !n.read).length,
@@ -326,13 +358,13 @@
   };
   const hoursOf = (b) => {
     const h = Number(b.hours);
-    if (!(h > 0) || h > G.AUTO_MAX_HOURS) fail(`Wybierz od 15 minut do ${G.AUTO_MAX_HOURS} godzin.`);
+    if (!(h > 0) || h > G.AUTO_MAX_HOURS) fail(`Wybierz od 5 minut do ${G.AUTO_MAX_HOURS} godzin.`);
     return h;
   };
   post('/train', (b) => {
     const p = me();
     const spec = specOf(b);
-    if (now() < p.last_train + G.TRAIN_COOLDOWN_MS) fail('Odpocznij chwilę – trening co 5 sekund.');
+    if (now() < p.last_train + G.TRAIN_COOLDOWN_MS) fail('Odpocznij chwilę. Trenować można co 5 sekund.');
     if (S.autos.some((j) => j.player_id === p.id && j.spec === spec)) fail('Ta specjalizacja trenuje teraz automatycznie.');
     const cost = G.trainCost(p.skills[spec]);
     if (p.money < cost.money) fail(`Trening kosztuje ${cost.money} monet.`);
@@ -378,7 +410,7 @@
     const moneyBack = Math.floor((j.money_total * left) / j.count);
     S.autos = S.autos.filter((x) => x !== j);
     p.money += moneyBack;
-    p.energy = Math.min(G.ENERGY_MAX, p.energy + energyBack);
+    p.energy += energyBack;
     return { message: `Anulowano. Zwrot: ${moneyBack} monet i ${energyBack} energii.` };
   });
   post('/daily-bonus', () => {
@@ -423,20 +455,48 @@
       .map((o) => publicPlayer(player(o.id)));
     return { opponents };
   });
-  post('/duel', (b) => {
+  const penaltyView = (d) => {
+    const o = player(d.opponent_id);
+    return { id: d.id, opponent: { id: o.id, name: o.name, position: o.position, ovr: o.ovr }, my: d.my, op: d.op, kicks: d.kicks, status: G.penaltyStatus(d) };
+  };
+  get('/penalty/current', () => {
     const p = me();
+    const d = S.penalties.find((x) => x.player_id === p.id && !x.finished);
+    return { duel: d ? penaltyView(d) : null };
+  });
+  post('/penalty/start', (b) => {
+    const p = me();
+    const open = S.penalties.find((x) => x.player_id === p.id && !x.finished);
+    if (open) return { duel: penaltyView(open) };
     const opp = player(Number(b.opponentId));
     if (!opp || opp.id === p.id) fail('Nieprawidłowy rywal.');
     if (!G.inDuelRange(p.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
-    spendEnergy(p, G.DUEL_ENERGY);
-    const { m, myRew } = duel(p, opp);
-    return { matchId: m.id, score: [m.home_score, m.away_score], reward: myRew };
+    spendEnergy(p, G.PENALTY_ENERGY);
+    const d = { id: nextId('penalty'), player_id: p.id, opponent_id: opp.id, seed: Math.floor(Math.random() * 2 ** 31), my: [], op: [], kicks: [], finished: false };
+    S.penalties.push(d);
+    return { duel: penaltyView(d) };
+  });
+  post('/penalty/:id/kick', (b, id) => {
+    const p = me();
+    const d = S.penalties.find((x) => x.id === id && x.player_id === p.id && !x.finished);
+    if (!d) fail('Ten pojedynek już się zakończył.');
+    const opp = player(d.opponent_id);
+    const input = { x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)), y: Math.max(-0.3, Math.min(1.4, Number(b.y) || 0)) };
+    const kick = penaltyKick(d, p, opp, input);
+    const status = G.penaltyStatus(d);
+    let reward = null;
+    if (status.finished) {
+      d.finished = true;
+      reward = finishPenalty(d, p, opp);
+      S.penalties = S.penalties.filter((x) => x !== d);
+    }
+    return { kick, status, my: d.my, op: d.op, reward };
   });
   get('/matches/:id', (b, id) => {
     me();
     const m = S.matches.find((x) => x.id === id);
     if (!m) fail('Nie ma takiego meczu.');
-    return { match: m };
+    return { match: { ...m, penalty: !!m.penalty } };
   });
   get('/my-matches', () => {
     const p = me();
@@ -460,8 +520,8 @@
     if (p.club_id) fail('Jesteś już w klubie.');
     const name = String(b.name || '').trim();
     const tag = String(b.tag || '').trim().toUpperCase();
-    if (!/^[\p{L}\d][\p{L}\d .'-]{2,29}$/u.test(name)) fail('Nazwa klubu: 3–30 znaków.');
-    if (!/^[A-Z0-9]{2,4}$/.test(tag)) fail('Skrót klubu: 2–4 litery/cyfry.');
+    if (!/^[\p{L}\d][\p{L}\d .'-]{2,29}$/u.test(name)) fail('Nazwa klubu musi mieć od 3 do 30 znaków.');
+    if (!/^[A-Z0-9]{2,4}$/.test(tag)) fail('Skrót klubu to od 2 do 4 liter lub cyfr.');
     if (p.money < G.CLUB_CREATE_COST) fail(`Założenie klubu kosztuje ${G.CLUB_CREATE_COST} monet.`);
     if (S.clubs.some((c) => c.name.toLowerCase() === name.toLowerCase() || c.tag === tag)) fail('Nazwa lub skrót są zajęte.');
     p.money -= G.CLUB_CREATE_COST;
@@ -610,9 +670,8 @@
   // Tylko w podglądzie – ułatwienia do testów.
   post('/preview/refill', () => {
     const p = me();
-    p.energy = G.ENERGY_MAX;
-    p.energy_updated = now();
-    return { message: 'Energia uzupełniona (tryb testowy).' };
+    p.energy += 500;
+    return { message: 'Dodano 500 energii (tryb testowy).' };
   });
   post('/preview/money', () => {
     const p = me();

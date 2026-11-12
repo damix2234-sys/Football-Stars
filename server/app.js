@@ -105,10 +105,8 @@ export function createApp(db, { now = () => Date.now() } = {}) {
 
   async function spendEnergy(p, amount) {
     if (p.energy < amount) fail(`Za mało energii (potrzeba ${amount}).`);
-    const updated = p.energy >= G.ENERGY_MAX ? now() : p.energy_updated;
-    await db.run('UPDATE players SET energy = energy - ?, energy_updated = ? WHERE id = ?', amount, updated, p.id);
+    await db.run('UPDATE players SET energy = energy - ? WHERE id = ?', amount, p.id);
     p.energy -= amount;
-    p.energy_updated = updated;
   }
 
   const notify = (pid, body) =>
@@ -198,7 +196,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     route(async (req, res) => {
       const login = String(req.body.login || '').trim();
       const password = String(req.body.password || '');
-      if (!/^[\p{L}\d_]{3,20}$/u.test(login)) fail('Login: 3–20 znaków (litery, cyfry, _).');
+      if (!/^[\p{L}\d_]{3,20}$/u.test(login)) fail('Login musi mieć od 3 do 20 znaków (litery, cyfry, _).');
       if (password.length < 6) fail('Hasło musi mieć min. 6 znaków.');
       if (await db.get('SELECT 1 FROM users WHERE lower(login) = lower(?)', login)) fail('Login jest zajęty.');
       const r = await db.run(
@@ -235,13 +233,13 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       stats: G.STATS,
       slots: G.SLOTS,
       items: G.ITEMS,
-      energyMax: G.ENERGY_MAX,
       energyRegenMs: G.ENERGY_REGEN_MS,
       categories: G.CATEGORIES,
       trainCooldownMs: G.TRAIN_COOLDOWN_MS,
       autoMaxHours: G.AUTO_MAX_HOURS,
       autoMaxActive: G.AUTO_MAX_ACTIVE,
-      duelEnergy: G.DUEL_ENERGY,
+      duelEnergy: G.PENALTY_ENERGY,
+      penaltyKicks: G.PENALTY_KICKS,
       clubCreateCost: G.CLUB_CREATE_COST,
       clubMaxMembers: G.CLUB_MAX_MEMBERS,
       duelOvrRatio: G.DUEL_OVR_RATIO,
@@ -286,7 +284,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       if (req.playerId) fail('Masz już piłkarza.');
       const name = String(req.body.name || '').trim();
       const position = String(req.body.position || '');
-      if (!/^[\p{L}][\p{L}\d .'-]{2,23}$/u.test(name)) fail('Nazwa piłkarza: 3–24 znaki, zaczyna się literą.');
+      if (!/^[\p{L}][\p{L}\d .'-]{2,23}$/u.test(name)) fail('Nazwa piłkarza musi mieć od 3 do 24 znaków i zaczynać się literą.');
       if (!G.POSITIONS[position]) fail('Wybierz pozycję.');
       if (await db.get('SELECT 1 FROM players WHERE lower(name) = lower(?)', name)) fail('Ta nazwa jest zajęta.');
       const skills = G.startingSkills(position);
@@ -302,7 +300,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
         JSON.stringify(skills),
         G.ovr(skills),
         G.START_MONEY,
-        G.ENERGY_MAX,
+        G.START_ENERGY,
       );
       await notify(r.rows[0].id, 'Witaj w Football Stars! Zacznij od treningu, a potem zagraj pierwszy mecz.');
     }),
@@ -349,6 +347,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
           money: p.money,
           energy: p.energy,
           energyUpdated: p.energy_updated,
+          form: 100, // forma i sprawność: szczegóły dojdą razem z silnikiem meczu
           dailyReadyAt: p.last_daily + G.DAILY_BONUS_MS,
           dailyAmount: G.dailyBonusAmount(p.ovr),
           clubRole: club ? (club.owner_id === p.id ? 'owner' : 'member') : null,
@@ -391,7 +390,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     action(async (req) => {
       const spec = specOf(req);
       const p = await loadPlayer(req.playerId);
-      if (now() < p.last_train + G.TRAIN_COOLDOWN_MS) fail('Odpocznij chwilę – trening co 5 sekund.');
+      if (now() < p.last_train + G.TRAIN_COOLDOWN_MS) fail('Odpocznij chwilę. Trenować można co 5 sekund.');
       if (await autoFor(p.id, spec)) fail('Ta specjalizacja trenuje teraz automatycznie.');
       const skills = skillsOf(p);
       const progress = progressOf(p);
@@ -420,7 +419,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
 
   const hoursOf = (req) => {
     const h = Number(req.body.hours);
-    if (!(h > 0) || h > G.AUTO_MAX_HOURS) fail(`Wybierz od 15 minut do ${G.AUTO_MAX_HOURS} godzin.`);
+    if (!(h > 0) || h > G.AUTO_MAX_HOURS) fail(`Wybierz od 5 minut do ${G.AUTO_MAX_HOURS} godzin.`);
     return h;
   };
 
@@ -480,9 +479,8 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       const moneyBack = Math.floor((j.money_total * left) / j.count);
       await db.run('DELETE FROM auto_trainings WHERE player_id = ? AND spec = ?', p.id, spec);
       await db.run(
-        'UPDATE players SET money = money + ?, energy = LEAST(?, energy + ?) WHERE id = ?',
+        'UPDATE players SET money = money + ?, energy = energy + ? WHERE id = ?',
         moneyBack,
-        G.ENERGY_MAX,
         energyBack,
         p.id,
       );
@@ -583,43 +581,132 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   const outcome = (a, b) => (a > b ? 'win' : a < b ? 'loss' : 'draw');
   const RESULT_COL = { win: 'wins', draw: 'draws', loss: 'losses' };
 
+  // ---------- pojedynki: seria rzutów karnych ----------
+  const KICK_TEXT = {
+    goal: (who) => `${who} strzela i jest GOL!`,
+    save: (who) => `${who} strzela, ale bramkarz broni.`,
+    miss: (who) => `${who} strzela obok bramki.`,
+  };
+  const clampKick = (b) => ({
+    x: Math.max(-1.4, Math.min(1.4, Number(b.x) || 0)),
+    y: Math.max(-0.3, Math.min(1.4, Number(b.y) || 0)),
+  });
+
+  async function penaltyView(row) {
+    const st = JSON.parse(row.state);
+    const opp = await db.get('SELECT id, name, position, ovr FROM players WHERE id = ?', row.opponent_id);
+    return { id: row.id, opponent: opp, my: st.my, op: st.op, kicks: st.kicks, status: G.penaltyStatus(st) };
+  }
+
+  app.get(
+    '/api/penalty/current',
+    needPlayer,
+    route(async (req) => {
+      const row = await db.get('SELECT * FROM penalty_duels WHERE player_id = ? AND finished = 0', req.playerId);
+      return { duel: row ? await penaltyView(row) : null };
+    }),
+  );
+
   app.post(
-    '/api/duel',
+    '/api/penalty/start',
     needPlayer,
     action(async (req) => {
+      const open = await db.get('SELECT * FROM penalty_duels WHERE player_id = ? AND finished = 0', req.playerId);
+      if (open) return { duel: await penaltyView(open) }; // dokończ rozpoczęty pojedynek
       const oppId = Number(req.body.opponentId) || 0;
       if (oppId === req.playerId) fail('Nieprawidłowy rywal.');
-      // blokujemy obu graczy w stałej kolejności, żeby uniknąć zakleszczeń
-      await db.all('SELECT id FROM players WHERE id = ANY(?) ORDER BY id FOR UPDATE', [req.playerId, oppId]);
       const me = await loadPlayer(req.playerId);
-      const opp = await loadPlayer(oppId);
+      const opp = await db.get('SELECT * FROM players WHERE id = ?', oppId);
       if (!opp) fail('Nieprawidłowy rywal.');
       if (!G.inDuelRange(me.ovr, opp.ovr)) fail('Rywal jest za mocny albo za słaby (OVR różni się więcej niż 1,5 raza).');
-      await spendEnergy(me, G.DUEL_ENERGY);
-      const seed = crypto.randomInt(2 ** 31);
-      const result = G.simulate(
-        G.playerSide(me.name, await effStats(me)),
-        G.playerSide(opp.name, await effStats(opp)),
-        seed,
+      await spendEnergy(me, G.PENALTY_ENERGY);
+      const r = await db.run(
+        'INSERT INTO penalty_duels (player_id, opponent_id, seed, state, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *',
+        me.id,
+        opp.id,
+        crypto.randomInt(2 ** 31),
+        JSON.stringify({ my: [], op: [], kicks: [] }),
+        now(),
       );
-      const matchId = await saveMatch('duel', me, opp, result, seed);
-      const [gs, ga] = result.score;
-      const myRes = outcome(gs, ga);
-      const oppRes = outcome(ga, gs);
-      const myRew = G.duelRewards(myRes, me.ovr);
-      // Wyzwany dostaje połowę nagrody – gra toczy się, nawet gdy jest offline.
-      const oppRew = G.duelRewards(oppRes, opp.ovr);
-      const settle = (id, money, res, goals) =>
-        db.run(
-          `UPDATE players SET money = money + ?, ${RESULT_COL[res]} = ${RESULT_COL[res]} + 1, goals = goals + ? WHERE id = ?`,
-          money,
-          goals,
-          id,
+      return { duel: await penaltyView(r.rows[0]) };
+    }),
+  );
+
+  // Jeden ruch: strzał (gdy strzelamy) albo wybór miejsca rzutu bramkarza (gdy bronimy).
+  app.post(
+    '/api/penalty/:id/kick',
+    needPlayer,
+    action(async (req) => {
+      const row = await db.get(
+        'SELECT * FROM penalty_duels WHERE id = ? AND player_id = ? AND finished = 0 FOR UPDATE',
+        Number(req.params.id) || 0,
+        req.playerId,
+      );
+      if (!row) fail('Ten pojedynek już się zakończył.');
+      const st = JSON.parse(row.state);
+      const status = G.penaltyStatus(st);
+      const me = await loadPlayer(req.playerId);
+      const opp = await db.get('SELECT * FROM players WHERE id = ?', row.opponent_id);
+      const myStats = await effStats(me);
+      const oppStats = await effStats(opp);
+      const rand = G.rng(Number(row.seed) + st.kicks.length * 7919);
+      const target = clampKick(req.body);
+      let kick;
+      if (status.turn === 'shoot') {
+        const ball = G.ballLanding(target, G.shooterSkill(myStats), rand);
+        const dive = G.aiDive(rand);
+        kick = { side: 'my', target, ball, dive, result: G.resolveKick(ball, dive, G.keeperSkill(oppStats)) };
+        st.my.push(kick.result);
+      } else {
+        const aim = G.aiAim(rand);
+        const ball = G.ballLanding(aim, G.shooterSkill(oppStats), rand);
+        kick = { side: 'op', target: aim, ball, dive: target, result: G.resolveKick(ball, target, G.keeperSkill(myStats)) };
+        st.op.push(kick.result);
+      }
+      st.kicks.push(kick);
+      const after = G.penaltyStatus(st);
+      let reward = null;
+      if (after.finished) {
+        const events = st.kicks.map((k, i) => ({
+          minute: i + 1,
+          side: k.side === 'my' ? 0 : 1,
+          type: k.result === 'goal' ? 'goal' : k.result === 'save' ? 'save' : 'miss',
+          text: KICK_TEXT[k.result](k.side === 'my' ? me.name : opp.name),
+        }));
+        const r = await db.run(
+          `INSERT INTO matches (kind, home_id, away_id, home_name, away_name, home_score, away_score, events, created_at)
+           VALUES ('duel', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+          me.id,
+          opp.id,
+          me.name,
+          opp.name,
+          after.me,
+          after.op,
+          JSON.stringify({ penalty: true, events }),
+          now(),
         );
-      await settle(me.id, myRew.money, myRes, gs);
-      await settle(opp.id, Math.floor(oppRew.money / 2), oppRes, ga);
-      await notify(opp.id, `${me.name} wyzwał Cię na mecz. Wynik: ${gs}:${ga}.`);
-      return { matchId, score: result.score, reward: myRew };
+        const oppRes = after.result === 'win' ? 'loss' : after.result === 'loss' ? 'win' : 'draw';
+        const myRew = G.duelRewards(after.result, me.ovr);
+        const oppRew = G.duelRewards(oppRes, opp.ovr);
+        const settle = (id, money, res, goals) =>
+          db.run(
+            `UPDATE players SET money = money + ?, ${RESULT_COL[res]} = ${RESULT_COL[res]} + 1, goals = goals + ? WHERE id = ?`,
+            money,
+            goals,
+            id,
+          );
+        await settle(me.id, myRew.money, after.result, after.me);
+        await settle(opp.id, Math.floor(oppRew.money / 2), oppRes, after.op);
+        await notify(opp.id, `${me.name} wyzwał Cię na pojedynek karnych. Wynik: ${after.me}:${after.op}.`);
+        reward = { money: myRew.money, matchId: r.rows[0].id };
+      }
+      await db.run(
+        'UPDATE penalty_duels SET state = ?, finished = ? WHERE id = ?',
+        JSON.stringify(st),
+        after.finished ? 1 : 0,
+        row.id,
+      );
+      return { kick, status: after, my: st.my, op: st.op, reward };
     }),
   );
 
@@ -629,7 +716,8 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     route(async (req) => {
       const m = await db.get('SELECT * FROM matches WHERE id = ?', Number(req.params.id) || 0);
       if (!m) fail('Nie ma takiego meczu.', 404);
-      return { match: { ...m, events: JSON.parse(m.events).events } };
+      const parsed = JSON.parse(m.events);
+      return { match: { ...m, events: parsed.events, penalty: !!parsed.penalty } };
     }),
   );
 
@@ -677,8 +765,8 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       if (p.club_id) fail('Jesteś już w klubie.');
       const name = String(req.body.name || '').trim();
       const tag = String(req.body.tag || '').trim().toUpperCase();
-      if (!/^[\p{L}\d][\p{L}\d .'-]{2,29}$/u.test(name)) fail('Nazwa klubu: 3–30 znaków.');
-      if (!/^[A-Z0-9]{2,4}$/.test(tag)) fail('Skrót klubu: 2–4 litery/cyfry.');
+      if (!/^[\p{L}\d][\p{L}\d .'-]{2,29}$/u.test(name)) fail('Nazwa klubu musi mieć od 3 do 30 znaków.');
+      if (!/^[A-Z0-9]{2,4}$/.test(tag)) fail('Skrót klubu to od 2 do 4 liter lub cyfr.');
       if (p.money < G.CLUB_CREATE_COST) fail(`Założenie klubu kosztuje ${G.CLUB_CREATE_COST} monet.`);
       if (await db.get('SELECT 1 FROM clubs WHERE lower(name) = lower(?) OR tag = ?', name, tag))
         fail('Nazwa lub skrót są zajęte.');
@@ -887,7 +975,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
         );
         for (const m of team.members) {
           await db.run('UPDATE players SET money = money + ? WHERE id = ?', rew.money, m.id);
-          await notify(m.id, `Mecz klubowy ${club.name} – ${opp.name}: ${hs}:${as}.`);
+          await notify(m.id, `Mecz klubowy ${club.name} vs ${opp.name}: ${hs}:${as}.`);
         }
       };
       await settle(club, home, outcome(hs, as));

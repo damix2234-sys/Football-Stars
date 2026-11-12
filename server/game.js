@@ -20,7 +20,7 @@ export const CATEGORIES = [
     positions: ['NAP', 'POM'],
     specs: [
       { id: 'wykonczenie', name: 'Wykończenie', icon: 'target',
-        about: 'Celność i siła strzału. Najważniejsza umiejętność napastnika – decyduje, czy sytuacja zamieni się w gola.' },
+        about: 'Celność i siła strzału. Najważniejsza umiejętność napastnika, bo decyduje, czy sytuacja zamieni się w gola.' },
       { id: 'drybling', name: 'Drybling', icon: 'directions_run',
         about: 'Mijanie rywali z piłką. Pomaga wejść w pole karne i pomaga przy rozgrywaniu akcji.' },
     ],
@@ -49,7 +49,7 @@ export const CATEGORIES = [
   },
   {
     id: 'fizycznosc', name: 'Fizyczność', color: '#ff8a3d', icon: 'bolt',
-    about: 'Szybkość i siła przydają się wszędzie – w ataku, w obronie i w walce o piłkę.',
+    about: 'Szybkość i siła przydają się wszędzie: w ataku, w obronie i w walce o piłkę.',
     positions: ['NAP', 'OBR', 'POM'],
     specs: [
       { id: 'szybkosc', name: 'Szybkość', icon: 'speed',
@@ -71,7 +71,7 @@ export const CATEGORIES = [
   },
   {
     id: 'bramkarstwo', name: 'Bramkarstwo', color: '#b26bff', icon: 'sports_handball',
-    about: 'Obrona strzałów. Kluczowe dla bramkarza – w meczu klubowym drużyna bez dobrego bramkarza traci dużo goli.',
+    about: 'Obrona strzałów. Kluczowe dla bramkarza. W meczu klubowym drużyna bez dobrego bramkarza traci dużo goli.',
     positions: ['BR'],
     specs: [
       { id: 'refleks', name: 'Refleks', icon: 'flash_on',
@@ -99,8 +99,9 @@ const POSITION_START_BONUS = {
 };
 
 export const START_SKILL = 10;
-export const START_MONEY = 1000;
-export const ENERGY_MAX = 500;
+export const START_MONEY = 5000;
+// Energia nie ma limitu: odnawia się cały czas. START_ENERGY to energia nowego piłkarza.
+export const START_ENERGY = 500;
 export const ENERGY_REGEN_MS = 10 * 1000; // 1 pkt energii co 10 s (360 na godzinę)
 export const TRAIN_COOLDOWN_MS = 5000; // jeden trening co 5 s
 export const AUTO_MAX_HOURS = 8;
@@ -125,7 +126,7 @@ export const categoryOvr = (skills, catId) =>
 
 // Koszt jednego treningu specjalizacji na danym poziomie.
 export function trainCost(level) {
-  return { energy: 5 + Math.floor(level / 25), money: 30 + level * 2 };
+  return { energy: 5 + Math.floor(level / 25), money: 30 + level };
 }
 // Ile treningów potrzeba, by podnieść specjalizację o 1 poziom.
 export function trainingsNeeded(level) {
@@ -164,18 +165,15 @@ export function planAuto(level, progress, energy, money, hours) {
   return { count, energy: e, money: m, levels: lvl - level, durationMs: count * TRAIN_COOLDOWN_MS, slots, limit };
 }
 
-// Energia liczona leniwie na podstawie znacznika czasu.
+// Energia liczona leniwie na podstawie znacznika czasu (bez górnego limitu).
 export function currentEnergy(stored, updatedAt, now = Date.now()) {
-  if (stored >= ENERGY_MAX) return { energy: stored, updatedAt: now };
   const ticks = Math.floor((now - updatedAt) / ENERGY_REGEN_MS);
   if (ticks <= 0) return { energy: stored, updatedAt };
-  const energy = Math.min(ENERGY_MAX, stored + ticks);
-  const newUpdated = energy >= ENERGY_MAX ? now : updatedAt + ticks * ENERGY_REGEN_MS;
-  return { energy, updatedAt: newUpdated };
+  return { energy: stored + ticks, updatedAt: updatedAt + ticks * ENERGY_REGEN_MS };
 }
 
 export function dailyBonusAmount(o) {
-  return 50 + Math.floor(o / 5);
+  return 500 + o * 2;
 }
 
 export function inDuelRange(a, b) {
@@ -303,16 +301,16 @@ export function teamSide(name, members) {
 
 // Nagrody za mecz (rosną z OVR).
 export function duelRewards(result, o) {
-  const base = 20 + Math.floor(o / 10);
+  const base = 150 + Math.floor(o / 2);
   if (result === 'win') return { money: base * 2 };
   if (result === 'draw') return { money: base };
   return { money: Math.floor(base / 2) };
 }
 
 export function clubMatchRewards(result) {
-  if (result === 'win') return { points: 3, treasury: 300, money: 120 };
-  if (result === 'draw') return { points: 1, treasury: 150, money: 60 };
-  return { points: 0, treasury: 50, money: 25 };
+  if (result === 'win') return { points: 3, treasury: 1000, money: 600 };
+  if (result === 'draw') return { points: 1, treasury: 500, money: 300 };
+  return { points: 0, treasury: 200, money: 120 };
 }
 
 // Sklep – sprzęt dający bonusy do umiejętności. "ovr" = wymagany OVR piłkarza.
@@ -344,4 +342,74 @@ export function effectiveStats(base, equippedItemIds) {
     for (const [k, v] of Object.entries(it.bonus)) s[k] = (s[k] || 0) + v;
   }
   return s;
+}
+
+/*
+ * Pojedynki: seria rzutów karnych 1 na 1.
+ * Bramka w układzie znormalizowanym: x od -1 (lewy słupek) do 1 (prawy słupek),
+ * y od 0 (murawa) do 1 (poprzeczka). Wynik każdego strzału liczy serwer.
+ */
+export const PENALTY_ENERGY = 25;
+export const PENALTY_KICKS = 5; // po 5 strzałów, potem nagła śmierć (maks. 10 par)
+export const PENALTY_MAX_KICKS = 10;
+
+export const shooterSkill = (s) => s.wykonczenie * 0.7 + s.wizja * 0.15 + s.szybkosc * 0.15;
+export const keeperSkill = (s) => s.refleks * 0.55 + s.chwytanie * 0.45;
+
+function gauss(rand) {
+  const u = Math.max(rand(), 1e-9);
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+}
+
+// Gdzie faktycznie poleci piłka: im lepsze wykończenie, tym mniejszy rozrzut.
+export function ballLanding(target, shooter, rand) {
+  const acc = shooter / (shooter + 30);
+  const spread = 0.05 + 0.3 * (1 - acc);
+  return { x: target.x + gauss(rand) * spread, y: target.y + gauss(rand) * spread * 0.8 };
+}
+
+// Zasięg bramkarza: lepszy bramkarz sięga dalej; strzały w okienko są trudniejsze.
+export function keeperReach(keeper, ball) {
+  const base = 0.3 + 0.32 * (keeper / (keeper + 40));
+  const corner = Math.abs(ball.x) > 0.75 && ball.y > 0.65 ? 0.75 : 1;
+  return base * corner;
+}
+
+// Rozstrzyga jeden strzał.
+export function resolveKick(ball, dive, keeper) {
+  if (Math.abs(ball.x) > 1 || ball.y > 1 || ball.y < 0) return 'miss';
+  const d = Math.hypot(ball.x - dive.x, (ball.y - dive.y) * 0.8);
+  return d <= keeperReach(keeper, ball) ? 'save' : 'goal';
+}
+
+// Bramkarz AI wybiera, gdzie się rzucić (nie zna celu strzelca).
+export function aiDive(rand) {
+  const r = rand();
+  const x = r < 0.4 ? -0.55 - rand() * 0.35 : r < 0.8 ? 0.55 + rand() * 0.35 : (rand() - 0.5) * 0.3;
+  return { x, y: 0.15 + rand() * 0.65 };
+}
+
+// Strzelec AI wybiera cel (najczęściej blisko słupków).
+export function aiAim(rand) {
+  const side = rand() < 0.5 ? -1 : 1;
+  const x = rand() < 0.8 ? side * (0.45 + rand() * 0.45) : (rand() - 0.5) * 0.6;
+  return { x, y: 0.1 + rand() * 0.75 };
+}
+
+// Stan serii: wynik, czy koniec i kto teraz (my strzelamy pierwsi).
+export function penaltyStatus(st) {
+  const me = st.my.filter((k) => k === 'goal').length;
+  const op = st.op.filter((k) => k === 'goal').length;
+  let finished = false;
+  if (st.my.length <= PENALTY_KICKS && st.op.length <= PENALTY_KICKS) {
+    const myLeft = PENALTY_KICKS - st.my.length;
+    const opLeft = PENALTY_KICKS - st.op.length;
+    if (me + myLeft < op || op + opLeft < me) finished = true;
+  } else if (st.my.length === st.op.length && me !== op) {
+    finished = true; // nagła śmierć: para strzałów rozstrzyga
+  }
+  if (st.my.length === PENALTY_KICKS && st.op.length === PENALTY_KICKS && me !== op) finished = true;
+  if (st.my.length >= PENALTY_MAX_KICKS && st.my.length === st.op.length) finished = true;
+  const turn = finished ? null : st.my.length === st.op.length ? 'shoot' : 'save';
+  return { me, op, finished, turn, result: finished ? (me > op ? 'win' : me < op ? 'loss' : 'draw') : null };
 }

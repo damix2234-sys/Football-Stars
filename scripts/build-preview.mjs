@@ -28,6 +28,7 @@ ${body}
 <script>
 ${safe(game)}
 ${safe(read('preview/mock-api.js'))}
+${safe(read('public/penalty.js'))}
 (() => {
 ${safe(read('public/app.js'))}
 })();
