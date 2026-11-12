@@ -67,7 +67,7 @@
   const CAM = {
     // wysoko i daleko za strzelcem: widać całe pole karne
     shoot: camera([0, 24, 60], [0, 0, 10], 2642, 400, 340),
-    save: camera([0, 1.65, -0.8], [0, 0.55, 11], 640, 400, 322),
+    save: camera([0, 1.6, -9], [0, 0.8, 11], 915, 400, 290),
   };
 
   // ---------- stroje ----------
@@ -144,7 +144,11 @@
       for (let i = 0; i < 5; i++) for (let j = 0; j < 3; j++) g.fillRect(fx - 29 + i * 12, 11 + j * 10, 10, 8);
     }
     // murawa: pasy koszenia równoległe do linii bramkowej (co 5,5 m) i lekka szachownica
-    const zMin = view === 'shoot' ? -4 : 0.2;
+    const zMin = view === 'shoot' ? -4 : -0.5;
+    // murawa pod spodem (dla obszaru blisko kamery)
+    const near = P(0, 0, zMin);
+    g.fillStyle = view === 'shoot' ? '#4eab27' : '#1f7832';
+    g.fillRect(0, Math.min(H, near.y), W, H);
     const zMax = view === 'shoot' ? 32 : 62;
     const step = view === 'shoot' ? 3 : 2.75;
     const xs = view === 'shoot' ? 3.66 : 14;
@@ -303,11 +307,14 @@
     }
   }
 
-  // pose: { x, y (miednica), h (wzrost w px), rot, lean, head, aL1..aR2, lL1..lR2, foreL, foreR, back }
+  // Postać rysowana jak sprite z gry: najpierw cała sylwetka w ciemnym kolorze (jeden wspólny obrys),
+  // potem kolory, cieniowanie i detale. Dzięki temu nie widać łączeń części ciała.
+  // pose: { x, y (miednica), h (wzrost w px), rot, lean, head, aL1..aR2, lL1..lR2, foreL, foreR, back, smile }
+  const OUT = '#121812';
   function drawRig(g, pose, st) {
     const h = pose.h;
-    const w = h * 0.045;
-    const ol = 'rgba(0,0,0,.28)';
+    const w = h * 0.044;
+    const ow = Math.max(1, h * 0.012); // grubość obrysu
     g.save();
     g.translate(pose.x, pose.y);
     g.rotate(pose.rot || 0);
@@ -315,8 +322,8 @@
     const sc = [Math.sin(lean) * PR.torso * h, -Math.cos(lean) * PR.torso * h];
     const px = Math.cos(lean);
     const py = Math.sin(lean);
-    const shL = [sc[0] - (px * PR.shoulder * h) / 2, sc[1] - (py * PR.shoulder * h) / 2 + w * 0.4];
-    const shR = [sc[0] + (px * PR.shoulder * h) / 2, sc[1] + (py * PR.shoulder * h) / 2 + w * 0.4];
+    const shL = [sc[0] - (px * PR.shoulder * h) / 2, sc[1] - (py * PR.shoulder * h) / 2 + w * 0.5];
+    const shR = [sc[0] + (px * PR.shoulder * h) / 2, sc[1] + (py * PR.shoulder * h) / 2 + w * 0.5];
     const hipL = [-(PR.hip * h) / 2, 0];
     const hipR = [(PR.hip * h) / 2, 0];
     const limb = (start, a1, a2, l1, l2, fore = 0) => {
@@ -329,260 +336,334 @@
     const [kneeR, footR] = limb(hipR, pose.lR1, pose.lR2, PR.thigh, PR.shin, pose.foreR || 0);
     const [elbL, handL] = limb(shL, pose.aL1, pose.aL2, PR.uArm, PR.fArm);
     const [elbR, handR] = limb(shR, pose.aR1, pose.aR2, PR.uArm, PR.fArm);
+    const hr = PR.head * h;
+    const ha = lean + (pose.head || 0);
+    const neck = [sc[0] + Math.sin(ha) * hr * 0.55, sc[1] - Math.cos(ha) * hr * 0.55];
+    const hc = [sc[0] + Math.sin(ha) * hr * 1.45, sc[1] - Math.cos(ha) * hr * 1.45];
 
-    // noga: udo, kolano, getra z ochraniaczem, but z podeszwą
-    const leg = (hip, knee, foot, side) => {
-      capsule(g, hip[0], hip[1], knee[0], knee[1], w * 1.25, w * 0.95, st.skin, ol);
-      const sockTop = [lerp(knee[0], foot[0], 0.12), lerp(knee[1], foot[1], 0.12)];
-      capsule(g, knee[0], knee[1], sockTop[0], sockTop[1], w * 0.95, w * 0.92, st.skin);
-      capsule(g, sockTop[0], sockTop[1], foot[0], foot[1], w * 0.98, w * 0.7, st.socks, ol);
-      g.strokeStyle = shade(st.socks, 0.35);
-      g.lineWidth = w * 0.35;
+    // Kończyna jako gładki kształt: pogrubienie przy mięśniu (udo, łydka, biceps).
+    const taper = (a, b, w1, wm, w2, bulge = 0.4) => {
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      const nx = Math.cos(ang + PI / 2);
+      const ny = Math.sin(ang + PI / 2);
+      const m = [lerp(a[0], b[0], bulge), lerp(a[1], b[1], bulge)];
       g.beginPath();
-      g.moveTo(sockTop[0] - w * 0.9, sockTop[1]);
-      g.lineTo(sockTop[0] + w * 0.9, sockTop[1]);
-      g.stroke();
-      // ochraniacz (wypukłość na goleni)
-      g.fillStyle = 'rgba(255,255,255,.14)';
-      g.beginPath();
-      g.ellipse(lerp(sockTop[0], foot[0], 0.4), lerp(sockTop[1], foot[1], 0.4), w * 0.5, w * 2, Math.atan2(foot[0] - sockTop[0], sockTop[1] - foot[1]), 0, PI * 2);
-      g.fill();
-      // but
-      const toe = side * (pose.back ? -0.2 : 0.2);
+      g.moveTo(a[0] + nx * w1, a[1] + ny * w1);
+      g.quadraticCurveTo(m[0] + nx * wm * 1.15, m[1] + ny * wm * 1.15, b[0] + nx * w2, b[1] + ny * w2);
+      g.arc(b[0], b[1], w2, ang + PI / 2, ang - PI / 2, true);
+      g.quadraticCurveTo(m[0] - nx * wm * 1.15, m[1] - ny * wm * 1.15, a[0] - nx * w1, a[1] - ny * w1);
+      g.arc(a[0], a[1], w1, ang - PI / 2, ang + PI / 2, true);
+      g.closePath();
+    };
+    let outline = true;
+    // Wypełnia bieżącą ścieżkę: w przebiegu obrysu na ciemno z grubą krawędzią, w przebiegu koloru gradientem.
+    const paint = (fill) => {
+      if (outline) {
+        g.fillStyle = OUT;
+        g.strokeStyle = OUT;
+        g.lineWidth = ow * 2;
+        g.lineJoin = 'round';
+        g.fill();
+        g.stroke();
+      } else {
+        g.fillStyle = fill;
+        g.fill();
+      }
+    };
+    // światło z lewej góry: gradient w poprzek kończyny
+    const lit = (a, b, base, wd) => {
+      if (outline) return base;
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) + PI / 2;
+      const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const gr = g.createLinearGradient(m[0] - Math.cos(ang) * wd, m[1] - Math.sin(ang) * wd, m[0] + Math.cos(ang) * wd, m[1] + Math.sin(ang) * wd);
+      gr.addColorStop(0, shade(base, -0.22));
+      gr.addColorStop(0.45, shade(base, 0.12));
+      gr.addColorStop(1, shade(base, -0.3));
+      return gr;
+    };
+    const sockTopL = [lerp(kneeL[0], footL[0], 0.18), lerp(kneeL[1], footL[1], 0.18)];
+    const sockTopR = [lerp(kneeR[0], footR[0], 0.18), lerp(kneeR[1], footR[1], 0.18)];
+
+    const legs = (hip, knee, sockTop, foot, side) => {
+      taper(hip, knee, w * 1.35, w * 1.45, w * 0.95, 0.35); // udo
+      paint(lit(hip, knee, st.skin, w * 1.4));
+      taper(knee, foot, w * 0.95, w * 1.15, w * 0.62, 0.3); // łydka
+      paint(lit(knee, foot, st.skin, w * 1.1));
+      if (!outline) {
+        taper(sockTop, foot, w * 1.02, w * 1.18, w * 0.66, 0.25); // getra z ochraniaczem
+        g.fillStyle = lit(sockTop, foot, st.socks, w * 1.1);
+        g.fill();
+        g.strokeStyle = shade(st.socks, 0.4);
+        g.lineWidth = w * 0.32;
+        g.beginPath();
+        g.moveTo(sockTop[0] - w, sockTop[1]);
+        g.lineTo(sockTop[0] + w, sockTop[1]);
+        g.stroke();
+      }
+      // but z noskiem i podeszwą
+      const toe = side * (pose.back ? -0.25 : 0.25);
       g.save();
-      g.translate(foot[0], foot[1] + w * 0.25);
+      g.translate(foot[0], foot[1] + w * 0.2);
       g.rotate(toe);
-      g.fillStyle = st.boots;
       g.beginPath();
-      g.ellipse(side * w * 0.25, 0, w * 1.45, w * 0.72, 0, 0, PI * 2);
-      g.fill();
-      g.strokeStyle = ol;
-      g.lineWidth = w * 0.15;
-      g.stroke();
-      g.fillStyle = st.sole;
-      g.fillRect(-w * 1.1 + side * w * 0.25, w * 0.42, w * 2.2, w * 0.28);
-      g.strokeStyle = st.sole;
-      g.lineWidth = w * 0.2;
-      g.beginPath();
-      g.moveTo(-w * 0.6 + side * w * 0.25, -w * 0.2);
-      g.quadraticCurveTo(side * w * 0.25, w * 0.15, w * 0.7 + side * w * 0.25, -w * 0.25);
-      g.stroke();
+      g.moveTo(-w * 1.0, -w * 0.55);
+      g.quadraticCurveTo(side * w * 1.9, -w * 0.75, side * w * 1.85, w * 0.15);
+      g.quadraticCurveTo(side * w * 1.7, w * 0.62, 0, w * 0.62);
+      g.quadraticCurveTo(-w * 1.2, w * 0.6, -w * 1.0, -w * 0.55);
+      paint(st.boots);
+      if (!outline) {
+        g.fillStyle = st.sole;
+        g.fillRect(side > 0 ? -w * 1.0 : -w * 1.8, w * 0.38, w * 2.8, w * 0.22);
+        g.strokeStyle = 'rgba(255,255,255,.35)';
+        g.lineWidth = w * 0.15;
+        g.beginPath();
+        g.moveTo(-w * 0.6, -w * 0.35);
+        g.quadraticCurveTo(side * w * 0.6, -w * 0.5, side * w * 1.4, -w * 0.2);
+        g.stroke();
+      }
       g.restore();
     };
-    leg(hipL, kneeL, footL, -1);
-    leg(hipR, kneeR, footR, 1);
 
-    // spodenki z bocznym lampasem
-    const shortsPts = [
-      [hipL[0] - w * 1.7, -w * 1.5],
-      [hipR[0] + w * 1.7, -w * 1.5],
-      [lerp(hipR[0], kneeR[0], 0.42) + w * 1.45, lerp(hipR[1], kneeR[1], 0.42)],
-      [lerp(hipR[0], kneeR[0], 0.42) - w * 1.1, lerp(hipR[1], kneeR[1], 0.42) + w * 0.3],
-      [0, w * 1.2],
-      [lerp(hipL[0], kneeL[0], 0.42) + w * 1.1, lerp(hipL[1], kneeL[1], 0.42) + w * 0.3],
-      [lerp(hipL[0], kneeL[0], 0.42) - w * 1.45, lerp(hipL[1], kneeL[1], 0.42)],
-    ];
-    const sg = g.createLinearGradient(-w * 3, 0, w * 3, 0);
-    sg.addColorStop(0, shade(st.shorts, 0.08));
-    sg.addColorStop(1, shade(st.shorts, -0.28));
-    g.fillStyle = sg;
-    g.beginPath();
-    shortsPts.forEach((p, i) => (i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])));
-    g.closePath();
-    g.fill();
-    g.strokeStyle = ol;
-    g.lineWidth = w * 0.15;
-    g.stroke();
-    g.strokeStyle = st.trim;
-    g.lineWidth = w * 0.3;
-    g.beginPath();
-    g.moveTo(shortsPts[1][0], shortsPts[1][1]);
-    g.lineTo(shortsPts[2][0], shortsPts[2][1]);
-    g.moveTo(shortsPts[0][0], shortsPts[0][1]);
-    g.lineTo(shortsPts[6][0], shortsPts[6][1]);
-    g.stroke();
-
-    // ręka (rysowana przed tułowiem lub za nim)
-    const arm = (sh, elb, hand) => {
-      capsule(g, sh[0], sh[1], elb[0], elb[1], w * 1.15, w * 0.92, st.sleeve, ol);
-      if (!st.long) {
+    const arms = (sh, elb, hand) => {
+      taper(sh, elb, w * 1.15, w * 1.2, w * 0.9, 0.4);
+      paint(lit(sh, elb, st.long ? st.sleeve : st.skin, w * 1.2));
+      taper(elb, hand, w * 0.9, w * 0.95, w * 0.62, 0.35);
+      paint(lit(elb, hand, st.long ? st.sleeve : st.skin, w));
+      if (!outline && !st.long) {
+        // krótki rękaw
+        const cuff = [lerp(sh[0], elb[0], 0.6), lerp(sh[1], elb[1], 0.6)];
+        taper(sh, cuff, w * 1.32, w * 1.35, w * 1.22, 0.5);
+        g.fillStyle = lit(sh, cuff, st.sleeve, w * 1.3);
+        g.fill();
         g.strokeStyle = st.trim;
-        g.lineWidth = w * 0.3;
-        const cx = lerp(sh[0], elb[0], 0.62);
-        const cy = lerp(sh[1], elb[1], 0.62);
+        g.lineWidth = w * 0.28;
+        const a = Math.atan2(elb[1] - sh[1], elb[0] - sh[0]) + PI / 2;
         g.beginPath();
-        g.arc(cx, cy, w * 1.0, 0, PI * 2);
+        g.moveTo(cuff[0] - Math.cos(a) * w * 1.2, cuff[1] - Math.sin(a) * w * 1.2);
+        g.lineTo(cuff[0] + Math.cos(a) * w * 1.2, cuff[1] + Math.sin(a) * w * 1.2);
         g.stroke();
       }
-      capsule(g, st.long ? elb[0] : lerp(sh[0], elb[0], 0.68), st.long ? elb[1] : lerp(sh[1], elb[1], 0.68), hand[0], hand[1], w * 0.88, w * 0.68, st.long ? st.sleeve : st.skin, ol);
-      if (st.gloves) {
-        const a = Math.atan2(hand[1] - elb[1], hand[0] - elb[0]);
-        g.save();
-        g.translate(hand[0], hand[1]);
-        g.rotate(a - PI / 2);
-        g.fillStyle = '#121a14';
-        g.beginPath();
-        g.roundRect(-w * 1.05, -w * 0.8, w * 2.1, w * 0.9, w * 0.3);
-        g.fill();
-        g.fillStyle = '#f5f7f3';
-        g.beginPath();
-        g.roundRect(-w * 1.15, 0, w * 2.3, w * 2.2, w * 0.9);
-        g.fill();
-        g.strokeStyle = ol;
-        g.lineWidth = w * 0.15;
-        g.stroke();
+      // dłoń albo rękawica bramkarska
+      const a = Math.atan2(hand[1] - elb[1], hand[0] - elb[0]);
+      g.save();
+      g.translate(hand[0], hand[1]);
+      g.rotate(a - PI / 2);
+      g.beginPath();
+      if (st.gloves) g.roundRect(-w * 1.15, -w * 0.4, w * 2.3, w * 2.5, w * 0.95);
+      else g.ellipse(0, w * 0.4, w * 0.72, w * 0.9, 0, 0, PI * 2);
+      paint(st.gloves ? '#f5f7f3' : st.skin);
+      if (!outline && st.gloves) {
         g.fillStyle = '#b6f23a';
-        g.fillRect(-w * 1.05, -w * 0.4, w * 2.1, w * 0.3);
-        g.restore();
-      } else {
-        g.fillStyle = st.skin;
-        g.beginPath();
-        g.arc(hand[0], hand[1], w * 0.82, 0, PI * 2);
-        g.fill();
+        g.fillRect(-w * 1.1, -w * 0.25, w * 2.2, w * 0.4);
+        g.fillStyle = 'rgba(0,0,0,.12)';
+        for (let i = -1; i <= 1; i++) g.fillRect(i * w * 0.55 - w * 0.06, w * 0.9, w * 0.12, w * 1.2);
       }
+      g.restore();
     };
 
-    // koszulka: trapez z barkami, kołnierz w serek, panele boczne, numer
-    const tg = g.createLinearGradient(shL[0] - w * 2, sc[1], shR[0] + w * 2, 0);
-    tg.addColorStop(0, shade(st.shirt, 0.18));
-    tg.addColorStop(0.55, st.shirt);
-    tg.addColorStop(1, shade(st.shirt, -0.32));
-    g.fillStyle = tg;
-    g.beginPath();
-    g.moveTo(shL[0] - w * 0.8, shL[1] - w * 0.2);
-    g.quadraticCurveTo(sc[0], sc[1] - w * 1.6, shR[0] + w * 0.8, shR[1] - w * 0.2);
-    g.quadraticCurveTo(shR[0] + w * 0.9, lerp(shR[1], 0, 0.55), hipR[0] + w * 1.75, -w * 1.1);
-    g.lineTo(hipL[0] - w * 1.75, -w * 1.1);
-    g.quadraticCurveTo(shL[0] - w * 0.9, lerp(shL[1], 0, 0.55), shL[0] - w * 0.8, shL[1] - w * 0.2);
-    g.fill();
-    g.strokeStyle = ol;
-    g.lineWidth = w * 0.15;
-    g.stroke();
-    // panele boczne
-    g.fillStyle = 'rgba(0,0,0,.14)';
-    g.beginPath();
-    g.moveTo(shR[0] + w * 0.4, shR[1] + w * 1.2);
-    g.quadraticCurveTo(shR[0] + w * 0.6, lerp(shR[1], 0, 0.5), hipR[0] + w * 1.6, -w * 1.2);
-    g.lineTo(hipR[0] + w * 0.7, -w * 1.2);
-    g.quadraticCurveTo(shR[0] - w * 0.3, lerp(shR[1], 0, 0.5), shR[0] + w * 0.4, shR[1] + w * 1.2);
-    g.fill();
+    const torso = () => {
+      // tułów: barki, klatka, talia (lekko węższa), biodra
+      g.beginPath();
+      g.moveTo(shL[0] - w * 0.9, shL[1] - w * 0.1);
+      g.quadraticCurveTo(sc[0], sc[1] - w * 1.7, shR[0] + w * 0.9, shR[1] - w * 0.1);
+      g.quadraticCurveTo(shR[0] + w * 0.75, lerp(shR[1], 0, 0.45), hipR[0] + w * 1.25, lerp(shR[1], 0, 0.7));
+      g.quadraticCurveTo(hipR[0] + w * 1.7, -w * 0.6, hipR[0] + w * 1.7, w * 0.2);
+      g.lineTo(hipL[0] - w * 1.7, w * 0.2);
+      g.quadraticCurveTo(hipL[0] - w * 1.7, -w * 0.6, hipL[0] - w * 1.25, lerp(shL[1], 0, 0.7));
+      g.quadraticCurveTo(shL[0] - w * 0.75, lerp(shL[1], 0, 0.45), shL[0] - w * 0.9, shL[1] - w * 0.1);
+      g.closePath();
+      if (outline) return paint();
+      const tg = g.createLinearGradient(shL[0] - w * 2, sc[1], shR[0] + w * 2, 0);
+      tg.addColorStop(0, shade(st.shirt, 0.2));
+      tg.addColorStop(0.5, st.shirt);
+      tg.addColorStop(1, shade(st.shirt, -0.35));
+      paint(tg);
+      // fałdy materiału
+      g.strokeStyle = 'rgba(0,0,0,.12)';
+      g.lineWidth = w * 0.18;
+      g.beginPath();
+      g.moveTo(lerp(shL[0], 0, 0.4), lerp(shL[1], 0, 0.55));
+      g.quadraticCurveTo(0, lerp(sc[1], 0, 0.7), lerp(shR[0], 0, 0.3), lerp(shR[1], 0, 0.85));
+      g.stroke();
+    };
+
+    const shorts = () => {
+      const fl = [lerp(hipL[0], kneeL[0], 0.42), lerp(hipL[1], kneeL[1], 0.42)];
+      const fr = [lerp(hipR[0], kneeR[0], 0.42), lerp(hipR[1], kneeR[1], 0.42)];
+      g.beginPath();
+      g.moveTo(hipL[0] - w * 1.75, -w * 1.2);
+      g.lineTo(hipR[0] + w * 1.75, -w * 1.2);
+      g.quadraticCurveTo(fr[0] + w * 1.7, lerp(-w, fr[1], 0.5), fr[0] + w * 1.45, fr[1]);
+      g.lineTo(fr[0] - w * 1.15, fr[1] + w * 0.25);
+      g.quadraticCurveTo(0, w * 0.6, fl[0] + w * 1.15, fl[1] + w * 0.25);
+      g.lineTo(fl[0] - w * 1.45, fl[1]);
+      g.quadraticCurveTo(fl[0] - w * 1.7, lerp(-w, fl[1], 0.5), hipL[0] - w * 1.75, -w * 1.2);
+      g.closePath();
+      if (outline) return paint();
+      const sg = g.createLinearGradient(-w * 3, 0, w * 3, 0);
+      sg.addColorStop(0, shade(st.shorts, 0.12));
+      sg.addColorStop(1, shade(st.shorts, -0.3));
+      paint(sg);
+      g.strokeStyle = st.trim;
+      g.lineWidth = w * 0.3;
+      g.beginPath();
+      g.moveTo(hipR[0] + w * 1.7, -w);
+      g.lineTo(fr[0] + w * 1.4, fr[1]);
+      g.moveTo(hipL[0] - w * 1.7, -w);
+      g.lineTo(fl[0] - w * 1.4, fl[1]);
+      g.stroke();
+    };
+
+    const head = () => {
+      // szyja
+      taper(sc, neck, w * 0.85, w * 0.85, w * 0.8, 0.5);
+      paint(shade(st.skin, -0.08));
+      g.save();
+      g.translate(hc[0], hc[1]);
+      g.rotate(ha);
+      // czaszka, żuchwa, uszy
+      g.beginPath();
+      g.moveTo(-hr * 0.9, -hr * 0.1);
+      g.quadraticCurveTo(-hr * 0.95, -hr * 1.05, 0, -hr * 1.05);
+      g.quadraticCurveTo(hr * 0.95, -hr * 1.05, hr * 0.9, -hr * 0.1);
+      g.quadraticCurveTo(hr * 0.85, hr * 0.75, 0, hr * 1.02);
+      g.quadraticCurveTo(-hr * 0.85, hr * 0.75, -hr * 0.9, -hr * 0.1);
+      g.closePath();
+      if (outline) paint();
+      else {
+        const hg = g.createRadialGradient(-hr * 0.35, -hr * 0.4, hr * 0.1, 0, 0, hr * 1.15);
+        hg.addColorStop(0, shade(st.skin, 0.14));
+        hg.addColorStop(1, shade(st.skin, -0.22));
+        paint(hg);
+      }
+      g.beginPath();
+      g.ellipse(-hr * 0.9, hr * 0.08, hr * 0.17, hr * 0.27, 0, 0, PI * 2);
+      g.ellipse(hr * 0.9, hr * 0.08, hr * 0.17, hr * 0.27, 0, 0, PI * 2);
+      paint(shade(st.skin, -0.12));
+      // włosy z objętością
+      g.beginPath();
+      if (pose.back) {
+        g.moveTo(-hr * 0.95, hr * 0.35);
+        g.quadraticCurveTo(-hr * 1.05, -hr * 1.2, 0, -hr * 1.18);
+        g.quadraticCurveTo(hr * 1.05, -hr * 1.2, hr * 0.95, hr * 0.35);
+        g.quadraticCurveTo(0, hr * 0.62, -hr * 0.95, hr * 0.35);
+      } else if (st.hairStyle === 'buzz') {
+        g.moveTo(-hr * 0.92, -hr * 0.15);
+        g.quadraticCurveTo(-hr * 0.95, -hr * 1.12, 0, -hr * 1.12);
+        g.quadraticCurveTo(hr * 0.95, -hr * 1.12, hr * 0.92, -hr * 0.15);
+        g.quadraticCurveTo(hr * 0.5, -hr * 0.62, 0, -hr * 0.6);
+        g.quadraticCurveTo(-hr * 0.5, -hr * 0.62, -hr * 0.92, -hr * 0.15);
+      } else {
+        const spiky = st.hairStyle === 'spiky';
+        g.moveTo(-hr * 0.98, hr * 0.0);
+        for (let i = 0; i <= 10; i++) {
+          const a = PI * 1.02 + (i / 10) * PI * 0.96;
+          const rr = hr * (spiky && i % 2 ? 1.32 : 1.08);
+          g.lineTo(Math.cos(a) * rr, -hr * 0.12 + Math.sin(a) * rr);
+        }
+        g.lineTo(hr * 0.98, hr * 0.0);
+        g.quadraticCurveTo(hr * 0.55, -hr * 0.5, 0, -hr * 0.42);
+        g.quadraticCurveTo(-hr * 0.55, -hr * 0.5, -hr * 0.98, hr * 0.0);
+      }
+      g.closePath();
+      paint(st.hair);
+      if (!outline) {
+        g.strokeStyle = 'rgba(255,255,255,.22)';
+        g.lineWidth = hr * 0.1;
+        g.beginPath();
+        g.arc(-hr * 0.2, -hr * 0.55, hr * 0.45, PI * 1.15, PI * 1.6);
+        g.stroke();
+        if (!pose.back) {
+          // twarz
+          for (const ex of [-hr * 0.36, hr * 0.36]) {
+            g.fillStyle = '#ffffff';
+            g.beginPath();
+            g.ellipse(ex, hr * 0.12, hr * 0.17, hr * 0.12, 0, 0, PI * 2);
+            g.fill();
+            g.fillStyle = '#2b1f17';
+            g.beginPath();
+            g.arc(ex + hr * 0.03, hr * 0.13, hr * 0.085, 0, PI * 2);
+            g.fill();
+            g.strokeStyle = shade(st.hair, 0.05);
+            g.lineWidth = hr * 0.1;
+            g.lineCap = 'round';
+            g.beginPath();
+            g.moveTo(ex - hr * 0.2, -hr * 0.12);
+            g.lineTo(ex + hr * 0.18, -hr * 0.17);
+            g.stroke();
+          }
+          g.strokeStyle = shade(st.skin, -0.3);
+          g.lineWidth = hr * 0.07;
+          g.beginPath();
+          g.moveTo(0, hr * 0.18);
+          g.lineTo(-hr * 0.07, hr * 0.44);
+          g.lineTo(hr * 0.05, hr * 0.46);
+          g.stroke();
+          g.strokeStyle = shade(st.skin, -0.5);
+          g.lineWidth = hr * 0.08;
+          g.beginPath();
+          g.moveTo(-hr * 0.24, hr * 0.66);
+          g.quadraticCurveTo(0, pose.smile ? hr * 0.86 : hr * 0.7, hr * 0.24, hr * 0.66);
+          g.stroke();
+        }
+      }
+      g.restore();
+    };
+
+    // kolejność: dalsza ręka i noga za tułowiem
+    const drawAll = () => {
+      legs(hipL, kneeL, sockTopL, footL, -1);
+      legs(hipR, kneeR, sockTopR, footR, 1);
+      shorts();
+      torso();
+      arms(shL, elbL, handL);
+      arms(shR, elbR, handR);
+      head();
+    };
+    outline = true;
+    drawAll();
+    outline = false;
+    drawAll();
+
+    // detale koszulki: kołnierz i numer
     if (pose.back) {
       g.save();
-      g.translate(lerp(sc[0], 0, 0.42), lerp(sc[1], 0, 0.42));
+      g.translate(lerp(sc[0], 0, 0.45), lerp(sc[1], 0, 0.45));
       g.rotate(lean);
-      g.fillStyle = st.numColor;
       g.font = `800 ${Math.round(h * 0.12)}px "Chakra Petch", sans-serif`;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
+      g.lineWidth = Math.max(1, h * 0.012);
+      g.strokeStyle = shade(st.shirt, -0.45);
+      g.strokeText(st.num, 0, 0);
+      g.fillStyle = st.numColor;
       g.fillText(st.num, 0, 0);
       g.restore();
       g.fillStyle = st.trim;
       g.beginPath();
-      g.ellipse(sc[0], sc[1] - w * 0.6, w * 1.3, w * 0.45, lean, 0, PI * 2);
+      g.ellipse(sc[0], sc[1] - w * 0.5, w * 1.25, w * 0.45, lean, 0, PI * 2);
       g.fill();
     } else {
       g.fillStyle = st.trim;
       g.beginPath();
-      g.moveTo(sc[0] - w * 1.2, sc[1] - w * 0.9);
+      g.moveTo(sc[0] - w * 1.15, sc[1] - w * 0.8);
       g.lineTo(sc[0], sc[1] + w * 0.9);
-      g.lineTo(sc[0] + w * 1.2, sc[1] - w * 0.9);
-      g.lineTo(sc[0] + w * 0.7, sc[1] - w * 0.9);
-      g.lineTo(sc[0], sc[1] + w * 0.1);
-      g.lineTo(sc[0] - w * 0.7, sc[1] - w * 0.9);
+      g.lineTo(sc[0] + w * 1.15, sc[1] - w * 0.8);
+      g.lineTo(sc[0] + w * 0.65, sc[1] - w * 0.8);
+      g.lineTo(sc[0], sc[1] + w * 0.15);
+      g.lineTo(sc[0] - w * 0.65, sc[1] - w * 0.8);
       g.closePath();
       g.fill();
       g.save();
-      g.translate(lerp(sc[0], 0, 0.42) + w * 1.2, lerp(sc[1], 0, 0.42) - w * 0.8);
+      g.translate(lerp(sc[0], 0, 0.42) + w * 1.25, lerp(sc[1], 0, 0.42) - w * 0.7);
       g.rotate(lean);
       g.fillStyle = st.numColor;
-      g.font = `800 ${Math.round(h * 0.07)}px "Chakra Petch", sans-serif`;
+      g.font = `800 ${Math.round(h * 0.065)}px "Chakra Petch", sans-serif`;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.fillText(st.num, 0, 0);
       g.restore();
     }
-    arm(shL, elbL, handL);
-    arm(shR, elbR, handR);
-
-    // szyja i głowa z twarzą
-    const hr = PR.head * h;
-    const ha = lean + (pose.head || 0);
-    const hc = [sc[0] + Math.sin(ha) * hr * 1.4, sc[1] - Math.cos(ha) * hr * 1.4];
-    capsule(g, sc[0], sc[1] - w * 0.5, hc[0], hc[1], w * 0.78, w * 0.72, shade(st.skin, -0.08));
-    g.save();
-    g.translate(hc[0], hc[1]);
-    g.rotate(ha);
-    const hg = g.createRadialGradient(-hr * 0.35, -hr * 0.35, hr * 0.1, 0, 0, hr * 1.1);
-    hg.addColorStop(0, shade(st.skin, 0.12));
-    hg.addColorStop(1, shade(st.skin, -0.2));
-    g.fillStyle = hg;
-    g.beginPath();
-    g.ellipse(0, 0, hr * 0.92, hr * 1.04, 0, 0, PI * 2);
-    g.fill();
-    g.strokeStyle = ol;
-    g.lineWidth = w * 0.14;
-    g.stroke();
-    // uszy
-    g.fillStyle = shade(st.skin, -0.1);
-    g.beginPath();
-    g.ellipse(-hr * 0.92, hr * 0.05, hr * 0.17, hr * 0.26, 0, 0, PI * 2);
-    g.ellipse(hr * 0.92, hr * 0.05, hr * 0.17, hr * 0.26, 0, 0, PI * 2);
-    g.fill();
-    // włosy
-    g.fillStyle = st.hair;
-    g.beginPath();
-    if (pose.back) {
-      g.ellipse(0, -hr * 0.08, hr * 0.96, hr * 0.98, 0, PI * 0.92, PI * 2.08);
-      g.lineTo(hr * 0.86, hr * 0.42);
-      g.quadraticCurveTo(0, hr * 0.6, -hr * 0.86, hr * 0.42);
-    } else if (st.hairStyle === 'buzz') {
-      g.ellipse(0, -hr * 0.18, hr * 0.94, hr * 0.86, 0, PI * 1.02, PI * 1.98);
-      g.quadraticCurveTo(hr * 0.8, -hr * 0.3, hr * 0.9, -hr * 0.05);
-    } else {
-      g.moveTo(-hr * 0.95, -hr * 0.05);
-      for (let i = 0; i <= 8; i++) {
-        const a = PI + (i / 8) * PI;
-        const rr = st.hairStyle === 'spiky' && i % 2 ? hr * 1.25 : hr * 1.02;
-        g.lineTo(Math.cos(a) * rr, -hr * 0.15 + Math.sin(a) * rr);
-      }
-      g.lineTo(hr * 0.95, -hr * 0.05);
-      g.quadraticCurveTo(hr * 0.3, -hr * 0.5, -hr * 0.95, -hr * 0.05);
-    }
-    g.fill();
-    if (!pose.back) {
-      // oczy, brwi, nos, usta
-      const eye = (x) => {
-        g.fillStyle = '#fff';
-        g.beginPath();
-        g.ellipse(x, hr * 0.12, hr * 0.17, hr * 0.12, 0, 0, PI * 2);
-        g.fill();
-        g.fillStyle = '#2a2018';
-        g.beginPath();
-        g.arc(x + hr * 0.03, hr * 0.13, hr * 0.085, 0, PI * 2);
-        g.fill();
-        g.strokeStyle = shade(st.hair, 0.1);
-        g.lineWidth = hr * 0.09;
-        g.beginPath();
-        g.moveTo(x - hr * 0.2, -hr * 0.12);
-        g.lineTo(x + hr * 0.18, -hr * 0.16);
-        g.stroke();
-      };
-      eye(-hr * 0.36);
-      eye(hr * 0.36);
-      g.strokeStyle = shade(st.skin, -0.3);
-      g.lineWidth = hr * 0.07;
-      g.beginPath();
-      g.moveTo(0, hr * 0.18);
-      g.lineTo(-hr * 0.06, hr * 0.42);
-      g.lineTo(hr * 0.05, hr * 0.44);
-      g.stroke();
-      g.strokeStyle = shade(st.skin, -0.45);
-      g.beginPath();
-      g.moveTo(-hr * 0.22, hr * 0.64);
-      g.quadraticCurveTo(0, pose.smile ? hr * 0.8 : hr * 0.68, hr * 0.22, hr * 0.64);
-      g.stroke();
-    }
-    g.restore();
     g.restore();
   }
 
@@ -940,9 +1021,9 @@
     let onPick = null;
     let raf = 0;
     // widok obrony: płaszczyzna bramki to rama obrazu
-    const FRAME = { cx: 400, gy: 520, hw: 350, hh: 455 };
-    const saveMap = (p) => ({ x: FRAME.cx + p.x * FRAME.hw, y: FRAME.gy - p.y * FRAME.hh });
-    const saveUnmap = (sx, sy) => ({ x: (sx - FRAME.cx) / FRAME.hw, y: (FRAME.gy - sy) / FRAME.hh });
+    // widok obrony: punkt bramki <-> ekran przez kamerę 3D zza linii bramkowej
+    const saveMap = (p) => CAM.save.p(p.x * GW, p.y * GH, 0);
+    const saveUnmap = (sx, sy) => CAM.save.toGoal(sx, sy);
 
     function resize() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -1151,95 +1232,115 @@
       }
     }
 
-    // ---------- widok: obrona (z bramki, same rękawice) ----------
+    // ---------- widok: obrona (zza linii bramkowej, bramka 7,32 x 2,44 m, same rękawice) ----------
+    function drawSaveFrame(cam) {
+      // boczne siatki i dach (od słupków w stronę kamery)
+      g.strokeStyle = 'rgba(235,245,240,.22)';
+      g.lineWidth = 1;
+      for (const sx of [-GW, GW]) {
+        for (let k = 0; k <= 10; k++) {
+          const y = (k / 10) * GH;
+          const a = cam.p(sx, y, 0);
+          const b = cam.p(sx * 1.02, y * 0.9, -1.6);
+          g.beginPath();
+          g.moveTo(a.x, a.y);
+          g.lineTo(b.x, b.y);
+          g.stroke();
+        }
+        for (let k = 0; k <= 6; k++) {
+          const z = -(k / 6) * 1.6;
+          const a = cam.p(sx * (1 + 0.02 * (k / 6)), 0, z);
+          const b = cam.p(sx * (1 + 0.02 * (k / 6)), GH * (1 - 0.1 * (k / 6)), z);
+          g.beginPath();
+          g.moveTo(a.x, a.y);
+          g.lineTo(b.x, b.y);
+          g.stroke();
+        }
+      }
+      for (let k = 0; k <= 24; k++) {
+        const x = lerp(-GW, GW, k / 24);
+        const a = cam.p(x, GH, 0);
+        const b = cam.p(x * 1.02, GH * 0.9, -1.6);
+        g.beginPath();
+        g.moveTo(a.x, a.y);
+        g.lineTo(b.x, b.y);
+        g.stroke();
+      }
+      // linia bramkowa między słupkami
+      const g0 = cam.p(-GW, 0, 0);
+      const g1 = cam.p(GW, 0, 0);
+      g.strokeStyle = 'rgba(255,255,255,.9)';
+      g.lineWidth = g0.s * 0.12;
+      g.beginPath();
+      g.moveTo(g0.x, g0.y);
+      g.lineTo(g1.x, g1.y);
+      g.stroke();
+      // słupki i poprzeczka (12 cm) z cieniowaniem walca
+      const L0 = cam.p(-GW, 0, 0), L1 = cam.p(-GW, GH, 0), R1 = cam.p(GW, GH, 0), R0 = cam.p(GW, 0, 0);
+      const pw = L1.s * 0.12;
+      const cyl = (x1, y1, x2, y2, vertical) => {
+        const gr = vertical ? g.createLinearGradient(x1 - pw / 2, 0, x1 + pw / 2, 0) : g.createLinearGradient(0, y1 - pw / 2, 0, y1 + pw / 2);
+        gr.addColorStop(0, '#aeb8b3');
+        gr.addColorStop(0.45, '#ffffff');
+        gr.addColorStop(1, '#9aa49f');
+        g.strokeStyle = gr;
+        g.lineWidth = pw;
+        g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(x1, y1);
+        g.lineTo(x2, y2);
+        g.stroke();
+      };
+      g.save();
+      g.shadowColor = 'rgba(0,0,0,.5)';
+      g.shadowBlur = 10;
+      cyl(L0.x, L0.y, L1.x, L1.y, true);
+      cyl(R0.x, R0.y, R1.x, R1.y, true);
+      cyl(L1.x, L1.y, R1.x, R1.y, false);
+      g.restore();
+    }
+
     function drawSave(now) {
       const cam = CAM.save;
       const a = state.anim && state.anim.kick.side === 'op' ? state.anim : null;
       const t = (now - state.t0) / 1000;
-      // przechył kamery podczas rzutu (jakbyś leciał razem z bramkarzem)
+      // lekki przechył i przesunięcie obrazu podczas rzutu
       let tilt = 0;
       let shiftX = 0;
       if (a && state.marker) {
         const k = easeOut(seg(a.t, a.contactT - 0.02, a.contactT + 0.3)) * (1 - smooth(seg(a.t, 0.88, 1)) * 0.6);
         const side = Math.sign(state.marker.x - 400);
-        tilt = side * 0.12 * k;
-        shiftX = -side * 26 * k;
+        tilt = side * 0.06 * k;
+        shiftX = -side * 18 * k;
       }
       g.save();
       g.translate(400 + shiftX, 300);
       g.rotate(tilt);
       g.translate(-400, -300);
-      g.drawImage(backdrop.save, -20, -20, W + 40, H + 40);
+      g.drawImage(backdrop.save, -24, -24, W + 48, H + 48);
       const react = a && a.t > a.hitT + 0.08 ? { k: seg(a.t, a.hitT + 0.08, a.hitT + 0.35), joy: a.result === 'goal' } : null;
       const sp = shooterFront(a ? phase(a, 0.62) : 0, cam, react);
       if (!a) sp.lean = Math.sin(t) * 0.03;
-      groundShadow(g, sp.x, sp.y + sp.h * 0.47, sp.h * 0.22);
-      // piłka za strzelcem do momentu strzału
+      groundShadow(g, sp.x, sp.y + sp.h * 0.47, sp.h * 0.24);
       const spot = cam.p(0, 0.11, SPOT);
-      const ballR = spot.s * 0.11;
       if (!a || a.t < a.contactT) {
-        groundShadow(g, spot.x, cam.p(0, 0, SPOT).y, ballR * 1.4, 0.45);
-        drawBall(g, spot.x, spot.y, ballR, 0);
+        const sh = cam.p(0, 0, SPOT);
+        groundShadow(g, sh.x, sh.y, spot.s * 0.16, 0.45);
+        drawBall(g, spot.x, spot.y, spot.s * 0.11, 0);
       }
       drawRig(g, sp, STYLE.shooterOp);
-      g.restore();
-      // rama bramki z bliska (słupki, poprzeczka, boczne siatki)
-      const post = g.createLinearGradient(0, 0, 60, 0);
-      post.addColorStop(0, '#8f9a95');
-      post.addColorStop(0.55, '#ffffff');
-      post.addColorStop(1, '#b3bdb8');
-      g.fillStyle = post;
-      g.fillRect(12, 28, 38, 532);
-      g.save();
-      g.translate(W, 0);
-      g.scale(-1, 1);
-      g.fillStyle = post;
-      g.fillRect(12, 28, 38, 532);
-      g.restore();
-      const bar = g.createLinearGradient(0, 28, 0, 66);
-      bar.addColorStop(0, '#ffffff');
-      bar.addColorStop(1, '#aab4af');
-      g.fillStyle = bar;
-      g.fillRect(12, 28, W - 24, 36);
-      g.strokeStyle = 'rgba(255,255,255,.16)';
-      g.lineWidth = 1;
-      for (let i = 0; i < 12; i++) {
-        g.beginPath();
-        g.moveTo(12 + i * 3, 64);
-        g.lineTo(0, 64 + i * 46);
-        g.moveTo(W - 12 - i * 3, 64);
-        g.lineTo(W, 64 + i * 46);
-        g.stroke();
-      }
-      // piłka w locie (przed ramą, rośnie w stronę kamery)
+      drawSaveFrame(cam);
+      // piłka w locie: ten sam tor 3D co w widoku strzału
       if (a && a.t >= a.contactT) {
-        const end = saveMap(a.kick.ball);
-        let x, y, r;
-        if (a.t <= a.hitT) {
-          const f = seg(a.t, a.contactT, a.hitT);
-          const e = f * f;
-          x = lerp(spot.x, end.x, e);
-          y = lerp(spot.y, end.y, e) - Math.sin(f * PI) * 40;
-          r = lerp(ballR, 34, e);
-        } else {
-          const k = seg(a.t, a.hitT, 1);
-          const side = end.x < 400 ? -1 : 1;
-          if (a.result === 'save') {
-            x = end.x + side * 170 * k;
-            y = end.y - 160 * Math.sin(k * PI * 0.6);
-            r = lerp(34, 24, k);
-          } else if (a.result === 'post') {
-            x = end.x - side * 140 * k;
-            y = end.y + 90 * k;
-            r = lerp(34, 28, k);
-          } else {
-            x = end.x + (end.x - 400) * 0.7 * k;
-            y = end.y + (end.y - 300) * 0.35 * k;
-            r = lerp(34, 66, k);
-          }
-        }
-        drawBall(g, x, y, r, a.t * 18);
+        let wpt;
+        if (a.t <= a.hitT) wpt = ballWorld(a.kick, ease(seg(a.t, a.contactT, a.hitT)), 0, KZ);
+        else wpt = ballWorld(a.kick, 1, seg(a.t, a.hitT, 1), KZ);
+        const bp = cam.p(wpt[0], wpt[1], wpt[2]);
+        const bs = cam.p(wpt[0], 0, wpt[2]);
+        groundShadow(g, bs.x, bs.y, Math.max(2, bp.s * 0.16), 0.4);
+        drawBall(g, bp.x, bp.y, bp.s * 0.11, a.t * 18);
       }
+      g.restore();
       // znacznik miejsca rzutu
       if (state.marker) {
         const m = state.marker;
@@ -1249,55 +1350,52 @@
           g.save();
           g.globalAlpha = fade;
           g.strokeStyle = '#ffd23f';
-          g.lineWidth = 4;
+          g.lineWidth = 3.5;
           g.shadowColor = '#ffd23f';
-          g.shadowBlur = 16;
+          g.shadowBlur = 14;
           g.beginPath();
-          g.arc(m.x, m.y, 40 + pulse * 6, 0, PI * 2);
+          g.arc(m.x, m.y, 30 + pulse * 5, 0, PI * 2);
           g.stroke();
-          g.lineWidth = 2.5;
+          g.lineWidth = 2;
           g.beginPath();
-          g.arc(m.x, m.y, 7, 0, PI * 2);
-          g.moveTo(m.x - 18, m.y);
-          g.lineTo(m.x - 11, m.y);
-          g.moveTo(m.x + 11, m.y);
-          g.lineTo(m.x + 18, m.y);
+          g.arc(m.x, m.y, 6, 0, PI * 2);
           g.stroke();
           g.restore();
         }
       } else if (!state.busy && state.aim && onPick) {
-        g.strokeStyle = 'rgba(255,214,63,.55)';
+        g.strokeStyle = 'rgba(255,214,63,.6)';
         g.lineWidth = 3;
-        g.setLineDash([8, 8]);
+        g.setLineDash([7, 7]);
         g.beginPath();
-        g.arc(state.aim.x, state.aim.y, 40, 0, PI * 2);
+        g.arc(state.aim.x, state.aim.y, 30, 0, PI * 2);
         g.stroke();
         g.setLineDash([]);
       }
-      // rękawice: gotowość, potem rzut do znacznika (przy obronie dokładnie do piłki)
-      const ready = { l: { x: 330, y: 455 }, r: { x: 470, y: 455 } };
-      const breath = Math.sin(now / 380) * 4;
+      // rękawice: gotowość nisko przed sobą, potem rzut (przy obronie dokładnie do piłki)
+      const ready = { l: { x: 340, y: 470 }, r: { x: 460, y: 470 } };
+      const breath = Math.sin(now / 380) * 3;
       let L = { x: ready.l.x, y: ready.l.y + breath };
       let R = { x: ready.r.x, y: ready.r.y + breath };
       let ang = 0;
+      let size = 70;
       if (a && state.marker) {
         const k = easeOut(seg(a.t, a.contactT - 0.02, a.contactT + 0.3));
         const goal = a.result === 'save' ? saveMap(a.kick.ball) : state.marker;
         const side = Math.sign(goal.x - 400) || 1;
         ang = side * 0.45 * k;
-        const gap = 40;
+        size = lerp(70, 50, k);
+        const gap = 28;
         L = { x: lerp(ready.l.x, goal.x - gap * Math.cos(ang), k), y: lerp(ready.l.y, goal.y - gap * Math.sin(ang), k) };
         R = { x: lerp(ready.r.x, goal.x + gap * Math.cos(ang), k), y: lerp(ready.r.y, goal.y + gap * Math.sin(ang), k) };
         if (k > 0.05 && k < 0.95) {
           g.globalAlpha = 0.16;
-          drawGlove(g, lerp(ready.l.x, L.x, 0.55), lerp(ready.l.y, L.y, 0.55), 78, ang - 0.22, true);
-          drawGlove(g, lerp(ready.r.x, R.x, 0.55), lerp(ready.r.y, R.y, 0.55), 78, ang + 0.22, false);
+          drawGlove(g, lerp(ready.l.x, L.x, 0.55), lerp(ready.l.y, L.y, 0.55), size, ang - 0.22, true);
+          drawGlove(g, lerp(ready.r.x, R.x, 0.55), lerp(ready.r.y, R.y, 0.55), size, ang + 0.22, false);
           g.globalAlpha = 1;
         }
       }
-      // lewa dłoń od grzbietu: kciuk do środka; prawa lustrzanie
-      drawGlove(g, L.x, L.y, 84, ang - 0.22, true);
-      drawGlove(g, R.x, R.y, 84, ang + 0.22, false);
+      drawGlove(g, L.x, L.y, size, ang - 0.22, true);
+      drawGlove(g, R.x, R.y, size, ang + 0.22, false);
     }
 
     // ---------- efekty ----------
