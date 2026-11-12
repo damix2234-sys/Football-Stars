@@ -246,6 +246,16 @@
   post('/logout', () => {
     S.session = null;
   });
+  get('/public/stats', () => ({
+    players: S.players.length,
+    clubs: S.clubs.length,
+    matches: S.matches.length,
+    online: S.players.filter((p) => now() - p.last_seen < 5 * 60 * 1000).length,
+  }));
+  get('/public/top', () => ({
+    players: [...S.players].sort((a, b) => b.level - a.level || b.xp - a.xp).slice(0, 5).map((p) => publicPlayer(p)),
+    clubs: [...S.clubs].sort((a, b) => b.points - a.points || b.wins - a.wins).slice(0, 5).map(clubRow),
+  }));
   get('/config', () => ({
     positions: G.POSITIONS, stats: G.STATS, slots: G.SLOTS, items: G.ITEMS, energyMax: G.ENERGY_MAX,
     energyRegenMs: G.ENERGY_REGEN_MS, trainingEnergy: G.TRAINING_ENERGY, duelEnergy: G.DUEL_ENERGY,

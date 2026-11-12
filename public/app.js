@@ -143,37 +143,159 @@ async function render() {
 }
 window.addEventListener('hashchange', render);
 
-function viewAuth() {
-  let mode = 'login';
-  const draw = () => {
-    view.innerHTML = `
-      <div class="card">
-        <h1>⚽ Football <span style="color:var(--accent)">Stars</span></h1>
-        <p class="muted">Stwórz piłkarza, trenuj, wygrywaj sparingi i poprowadź swój klub na szczyt.</p>
-        <div class="tabs">
-          <button data-m="login" class="${mode === 'login' ? 'on' : ''}">Logowanie</button>
-          <button data-m="register" class="${mode === 'register' ? 'on' : ''}">Rejestracja</button>
+// Strona startowa dla niezalogowanych: baner z postaciami, panel logowania/rejestracji,
+// liczby z gry, liderzy rankingu i opis rozgrywki.
+const IMG = (name) => (window.FS_ASSETS && window.FS_ASSETS[name]) || `img/${name}.jpg`;
+
+async function viewAuth(startMode = 'register') {
+  let mode = startMode;
+  let stats = null;
+  let top = null;
+  try {
+    [stats, top] = await Promise.all([api('/public/stats'), api('/public/top')]);
+  } catch {}
+  const n = (v) => (v == null ? '–' : fmt(v));
+
+  view.innerHTML = `
+  <div class="landing">
+    <header class="l-top">
+      <a class="logo" href="#">⚽ Football <b>Stars</b></a>
+      <button class="ghost small" data-goto="login">Zaloguj się</button>
+    </header>
+
+    <section class="l-hero" style="--hero:url('${IMG('hero')}')">
+      <div class="l-hero-inner">
+        <div class="l-pitch">
+          <p class="l-kicker">Darmowa gra piłkarska w przeglądarce</p>
+          <h1 class="l-title">Zostań <span>gwiazdą</span> boiska</h1>
+          <p class="l-lead">Stwórz własnego piłkarza, trenuj jego statystyki, wygrywaj sparingi z innymi graczami
+            i razem ze znajomymi zbuduj klub, o którym usłyszy cała liga.</p>
+          <div class="l-auth" id="auth">
+          <div class="tabs l-tabs">
+            <button data-m="register">Załóż konto</button>
+            <button data-m="login">Logowanie</button>
+          </div>
+          <form id="f">
+            <label>Login<input id="f-login" name="login" autocomplete="username" required></label>
+            <label>Hasło<input id="f-pass" name="password" type="password" required></label>
+            <button class="l-cta" id="f-submit"></button>
+            <p class="muted l-note" id="f-note"></p>
+          </form>
+          </div>
         </div>
-        <form id="f">
-          <label>Login<input name="login" autocomplete="username" required></label>
-          <label>Hasło<input name="password" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" required></label>
-          <button style="width:100%">${mode === 'login' ? 'Zaloguj' : 'Załóż konto'}</button>
-        </form>
-      </div>`;
-    view.querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => ((mode = b.dataset.m), draw())));
-    $('#f').onsubmit = async (ev) => {
-      ev.preventDefault();
-      const fd = Object.fromEntries(new FormData(ev.target));
-      try {
-        await api('/' + mode, fd);
-        await refreshMe();
-        render();
-      } catch (e) {
-        toast(e.message, true);
-      }
-    };
+      </div>
+    </section>
+
+    <section class="l-stats">
+      <div><b>${n(stats?.players)}</b><span>piłkarzy</span></div>
+      <div><b>${n(stats?.clubs)}</b><span>klubów</span></div>
+      <div><b>${n(stats?.matches)}</b><span>rozegranych meczów</span></div>
+      <div><b>${n(stats?.online)}</b><span>graczy online</span></div>
+    </section>
+
+    <ul class="l-ticks">
+      <li>Gra wieloosobowa – prawdziwi rywale i drużyny</li>
+      <li>Działa na telefonie i komputerze, bez instalacji</li>
+      <li>Proste zasady, dużo emocji w każdym meczu</li>
+    </ul>
+
+    ${
+      top?.players?.length
+        ? `<section class="l-section">
+        <h2 class="l-h2">Liderzy ligi</h2>
+        <div class="l-leaders">
+          <ol class="l-board">
+            ${top.players
+              .map(
+                (p, i) => `<li><span class="l-rank">${i + 1}</span><span class="l-name">${esc(p.name)}
+                  <small>${CFG.positions[p.position]}${p.club ? ` · [${esc(p.club.tag)}]` : ''}</small></span>
+                  <span class="l-score">poz. ${p.level}</span></li>`,
+              )
+              .join('')}
+          </ol>
+          ${
+            top.clubs?.length
+              ? `<ol class="l-board">
+            ${top.clubs
+              .map(
+                (c, i) => `<li><span class="l-rank">${i + 1}</span><span class="l-name">${esc(c.name)}
+                  <small>[${esc(c.tag)}] · ${c.members} zawodników</small></span><span class="l-score">${c.points} pkt</span></li>`,
+              )
+              .join('')}
+          </ol>`
+              : ''
+          }
+        </div>
+      </section>`
+        : ''
+    }
+
+    <section class="l-section">
+      <h2 class="l-h2">Jak wygląda gra?</h2>
+      <div class="l-features">
+        <article class="l-feature">
+          <img src="${IMG('training')}" alt="Piłkarz trenujący drybling na boisku" loading="lazy">
+          <div><h3>Trenuj codziennie</h3>
+          <p>Siedem statystyk: strzały, podania, drybling, obrona, szybkość, kondycja i bramkarstwo.
+            Każdy trening zużywa energię, która odnawia się z czasem.</p></div>
+        </article>
+        <article class="l-feature">
+          <img src="${IMG('match')}" alt="Napastnik oddający mocny strzał" loading="lazy">
+          <div><h3>Wygrywaj mecze</h3>
+          <p>Wyzwij innego gracza na sparing i śledź relację minuta po minucie.
+            O wyniku decydują statystyki, forma i odrobina szczęścia.</p></div>
+        </article>
+        <article class="l-feature">
+          <img src="${IMG('club')}" alt="Drużyna świętująca z pucharem" loading="lazy">
+          <div><h3>Zbuduj klub</h3>
+          <p>Załóż drużynę albo dołącz do istniejącej. Gromadźcie kasę klubu,
+            wyzywajcie inne kluby i walczcie o pierwsze miejsce w rankingu.</p></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="l-section">
+      <h2 class="l-h2">Start w trzech krokach</h2>
+      <ol class="l-steps">
+        <li><b>Załóż konto</b><span>Wystarczy login i hasło.</span></li>
+        <li><b>Stwórz piłkarza</b><span>Wybierz nazwę i pozycję na boisku.</span></li>
+        <li><b>Graj</b><span>Trenuj, rozgrywaj sparingi i szukaj klubu.</span></li>
+      </ol>
+      <div class="l-final"><button class="l-cta" data-goto="register">Zagraj za darmo</button></div>
+    </section>
+
+    <footer class="l-foot">Football Stars · gra przeglądarkowa · wszystkie postacie są fikcyjne</footer>
+  </div>`;
+
+  const setMode = (m) => {
+    mode = m;
+    view.querySelectorAll('[data-m]').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
+    $('#f-pass').autocomplete = m === 'login' ? 'current-password' : 'new-password';
+    $('#f-submit').textContent = m === 'login' ? 'Zaloguj się' : 'Załóż darmowe konto';
+    $('#f-note').textContent =
+      m === 'login' ? 'Nie masz konta? Wybierz „Załóż konto”.' : 'Login: 3–20 znaków. Hasło: min. 6 znaków.';
   };
-  draw();
+  setMode(mode);
+  view.querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => setMode(b.dataset.m)));
+  view.querySelectorAll('[data-goto]').forEach(
+    (b) =>
+      (b.onclick = () => {
+        setMode(b.dataset.goto);
+        $('#auth').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => $('#f-login').focus({ preventScroll: true }), 400);
+      }),
+  );
+  $('#f').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const fd = Object.fromEntries(new FormData(ev.target));
+    try {
+      await api('/' + mode, fd);
+      await refreshMe();
+      render();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
 }
 
 function viewCreate() {

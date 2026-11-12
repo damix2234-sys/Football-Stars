@@ -17,8 +17,10 @@ const html = read('public/index.html');
 const body = html.slice(html.indexOf('<body>') + 6, html.indexOf('<script')).trim();
 const safe = (js) => js.replace(/<\/script/gi, '<\\/script');
 
+const fonts = html.match(/<link[^>]+fonts\.g[^>]+>/g).join("\n");
 const out = `<title>Football Stars</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+${fonts}
 <style>
 ${css}
 </style>
@@ -32,6 +34,9 @@ ${safe(read('public/app.js'))}
 </script>
 `;
 
-fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
+fs.mkdirSync(path.join(root, 'dist', 'img'), { recursive: true });
+// grafiki publikujemy obok strony (dist/img/)
+for (const f of fs.readdirSync(path.join(root, 'public', 'img')))
+  fs.copyFileSync(path.join(root, 'public', 'img', f), path.join(root, 'dist', 'img', f));
 fs.writeFileSync(path.join(root, 'dist', 'football-stars.html'), out);
 console.log(`dist/football-stars.html (${(out.length / 1024).toFixed(1)} KB)`);

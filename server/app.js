@@ -44,6 +44,9 @@ export function createApp(db, { now = () => Date.now() } = {}) {
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.get('/healthz', (req, res) => res.send('ok'));
 
+  const clubListSql = `SELECT c.id, c.name, c.tag, c.points, c.wins, c.draws, c.losses,
+      (SELECT COUNT(*) FROM players p WHERE p.club_id = c.id) AS members FROM clubs c`;
+
   // ---------- pomocnicze ----------
   // W transakcji blokujemy wiersz gracza, żeby równoległe akcje nie nadpisały się nawzajem.
   async function loadPlayer(id) {
@@ -217,6 +220,27 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       clubCreateCost: G.CLUB_CREATE_COST,
       clubMaxMembers: G.CLUB_MAX_MEMBERS,
       duelLevelRange: G.DUEL_LEVEL_RANGE,
+    })),
+  );
+
+  // ---------- dane publiczne (strona startowa) ----------
+  app.get(
+    '/api/public/stats',
+    route(async () =>
+      db.get(
+        `SELECT (SELECT COUNT(*) FROM players) AS players, (SELECT COUNT(*) FROM clubs) AS clubs,
+           (SELECT COUNT(*) FROM matches) AS matches,
+           (SELECT COUNT(*) FROM players WHERE last_seen > ?) AS online`,
+        now() - 5 * 60 * 1000,
+      ),
+    ),
+  );
+
+  app.get(
+    '/api/public/top',
+    route(async () => ({
+      players: await publicPlayers(await db.all('SELECT * FROM players ORDER BY level DESC, xp DESC LIMIT 5')),
+      clubs: await db.all(`${clubListSql} ORDER BY c.points DESC, c.wins DESC LIMIT 5`),
     })),
   );
 
@@ -502,9 +526,6 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       players: await publicPlayers(await db.all('SELECT * FROM players ORDER BY level DESC, xp DESC LIMIT 200')),
     })),
   );
-
-  const clubListSql = `SELECT c.id, c.name, c.tag, c.points, c.wins, c.draws, c.losses,
-      (SELECT COUNT(*) FROM players p WHERE p.club_id = c.id) AS members FROM clubs c`;
 
   app.get(
     '/api/ranking/clubs',
