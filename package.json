@@ -1,0 +1,28 @@
+{
+  "name": "football-stars",
+  "version": "0.1.0",
+  "description": "Wieloosobowa przeglądarkowa gra piłkarska",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "dev": "node --no-warnings --watch server/index.js",
+    "test": "node --no-warnings --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/damix2234-sys/Football-Stars.git"
+  },
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/damix2234-sys/Football-Stars/issues"
+  },
+  "homepage": "https://github.com/damix2234-sys/Football-Stars#readme",
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "private": true
+}
