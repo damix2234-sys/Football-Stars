@@ -1003,13 +1003,9 @@ async function penaltyGame() {
       if (!alive()) return;
       if (d.status.finished) return finish(d);
       if (d.status.turn && !d.waiting) {
-        if (d.status.turn === 'shoot') {
-          hint('<b>Twój strzał.</b> Celownik krąży po bramce i wokół niej. Stuknij, gdy jest w bramce, aby strzelić. Poza bramką to pudło.');
-          scene.wait('shoot', send, { sweep: aimSpeed() });
-        } else {
-          hint('<b>Bronisz.</b> Stuknij w bramkę tam, gdzie rzuci się Twój bramkarz.');
-          scene.wait('save', send);
-        }
+        hint('');
+        if (d.status.turn === 'shoot') scene.wait('shoot', send, { sweep: aimSpeed() });
+        else scene.wait('save', send);
         const ms = Math.max(1000, Math.min(CFG_DECIDE, (d.deadlineIn || CFG_DECIDE) - 2000));
         const turn = d.status.turn;
         startTimer(ms, () => {
