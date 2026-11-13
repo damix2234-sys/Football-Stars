@@ -1438,14 +1438,14 @@
           for (let i = 6; i >= 1; i--) {
             const q = sweepPoint(now2 - i * 22);
             const qp = CAM.shoot.p(q.x * GW, q.y * GH, 0);
-            g.fillStyle = `rgba(182,242,58,${0.05 * (7 - i)})`;
+            g.fillStyle = `rgba(255,210,63,${0.05 * (7 - i)})`;
             g.beginPath();
             g.arc(qp.x, qp.y, 6, 0, PI * 2);
             g.fill();
           }
         }
         const c = CAM.shoot.p(sp.x * GW, sp.y * GH, 0);
-        const col = state.sweep.frozen ? '#ffd23f' : '#b6f23a';
+        const col = '#ffd23f'; // ten sam kolor co znacznik bramkarza
         g.save();
         g.strokeStyle = col;
         g.lineWidth = 3;
