@@ -54,6 +54,17 @@ test('karne: lepszy strzelec trafia częściej, seria kończy się poprawnie', (
 
 test('karne: celownik zwalnia z Wykończeniem, statystyki bramkarza nie mają wpływu', () => {
   assert.ok(G.aimSpeed(10) > G.aimSpeed(100) && G.aimSpeed(100) > G.aimSpeed(300));
+  // tor celownika wychodzi poza bramkę: zły moment stuknięcia daje pudło
+  let inGoal = 0, out = 0, wide = 0, over = 0;
+  for (let i = 0; i < 4000; i++) {
+    const p = G.aimPoint(i / 400, 1, 0.7);
+    assert.ok(p.y >= 0 && p.y <= 1.4 && Math.abs(p.x) <= 1.4);
+    if (Math.abs(p.x) > 1) wide++;
+    if (p.y > 1) over++;
+    if (G.resolveKick(p, { x: 5, y: 5 }, 0, 0) === 'miss') out++;
+    else inGoal++;
+  }
+  assert.ok(wide > 0 && over > 0 && out > 1000 && inGoal > 1000);
   for (const ball of [{ x: 0.4, y: 0.5 }, { x: -0.8, y: 0.3 }, { x: 0.1, y: 0.9 }]) {
     const dive = { x: 0, y: 0.5 };
     assert.equal(G.resolveKick(ball, dive, 0, 50), G.resolveKick(ball, dive, 500, 50));

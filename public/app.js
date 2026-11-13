@@ -858,7 +858,7 @@ function matchFound(duel) {
 function aimSpeed() {
   const s = ME.player.stats;
   const skill = s.wykonczenie * 0.7 + s.wizja * 0.15 + s.szybkosc * 0.15;
-  return 1.5 / (1 + skill / 45);
+  return 1.6 / (1 + skill / 45);
 }
 
 async function penaltyGame() {
@@ -1004,7 +1004,7 @@ async function penaltyGame() {
       if (d.status.finished) return finish(d);
       if (d.status.turn && !d.waiting) {
         if (d.status.turn === 'shoot') {
-          hint('<b>Twój strzał.</b> Celownik krąży po bramce. Stuknij, aby go zatrzymać i strzelić.');
+          hint('<b>Twój strzał.</b> Celownik krąży po bramce i wokół niej. Stuknij, gdy jest w bramce, aby strzelić. Poza bramką to pudło.');
           scene.wait('shoot', send, { sweep: aimSpeed() });
         } else {
           hint('<b>Bronisz.</b> Stuknij w bramkę tam, gdzie rzuci się Twój bramkarz.');

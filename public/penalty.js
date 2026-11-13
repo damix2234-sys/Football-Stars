@@ -1238,12 +1238,13 @@
       return { x: clamp(g0.x, -0.95, 0.95), y: clamp(g0.y, 0.05, 0.95) };
     }
 
-    // Krążący celownik napastnika: punkt bramki w chwili `now` (tor Lissajous pokrywa całą bramkę).
+    // Krążący celownik napastnika: punkt w chwili `now`. Tor Lissajous obejmuje bramkę i pas wokół niej
+    // (obok słupków i nad poprzeczką), ten sam wzór co aimPoint w server/game.js.
     function sweepPoint(now) {
       const sw = state.sweep;
       if (sw.frozen) return sw.frozen;
       const t = ((now - sw.t0) / 1000) * sw.speed;
-      return { x: 0.95 * Math.sin(2 * PI * t + sw.ph), y: 0.5 + 0.45 * Math.sin(2 * PI * t * 1.53 + sw.ph * 2.1) };
+      return { x: 1.35 * Math.sin(2 * PI * t + sw.ph), y: 0.66 + 0.62 * Math.sin(2 * PI * t * 1.53 + sw.ph * 2.1) };
     }
 
     function resize() {

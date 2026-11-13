@@ -380,8 +380,17 @@ export function makeBot(ovrTarget, rand) {
 // Ruch po czasie: strzał obok bramki albo bramkarz zostaje w środku.
 export const timeoutMove = (turn) => (turn === 'shoot' ? { x: 1.6, y: 0.4 } : { x: 0, y: 0.45 }); // zabezpieczenie przed nieskończoną serią
 
-// Celownik napastnika: obiegi bramki na sekundę. Na początku szybki, wolniejszy z wyższym Wykończeniem.
-export const aimSpeed = (shooter) => 1.5 / (1 + shooter / 45);
+// Celownik napastnika: obiegi toru na sekundę. Na początku szybki, wolniejszy z wyższym Wykończeniem.
+export const aimSpeed = (shooter) => 1.6 / (1 + shooter / 45);
+// Tor celownika obejmuje bramkę i pas wokół niej (obok słupków i nad poprzeczką),
+// więc źle wybrany moment = pudło. Ten sam wzór jest w public/penalty.js (sweepPoint).
+export const AIM_X = 1.35;
+export const AIM_Y_MID = 0.66;
+export const AIM_Y_AMP = 0.62;
+export function aimPoint(sec, speed, ph) {
+  const t = sec * speed;
+  return { x: AIM_X * Math.sin(2 * Math.PI * t + ph), y: AIM_Y_MID + AIM_Y_AMP * Math.sin(2 * Math.PI * t * 1.53 + ph * 2.1) };
+}
 export const shooterSkill = (s) => s.wykonczenie * 0.7 + s.wizja * 0.15 + s.szybkosc * 0.15;
 export const keeperSkill = (s) => s.refleks * 0.55 + s.chwytanie * 0.45;
 
