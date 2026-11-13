@@ -712,7 +712,8 @@ async function viewDuels(arg) {
           <p>Rzuty karne jeden na jednego z prawdziwym graczem. Raz strzelasz, raz bronisz. Po 5 strzałów wygrywa ten, kto trafił więcej razy, a przy remisie gracie dalej do pierwszej różnicy.</p>
           <ul>
             <li>Na każdy ruch masz 10 sekund.</li>
-            <li>Wykończenie daje mocniejszy strzał, Refleks i Chwytanie lepsze obrony.</li>
+            <li>Strzelasz, zatrzymując krążący celownik. Im lepsze Wykończenie, tym wolniej krąży i tym mocniejszy strzał.</li>
+            <li>Statystyki bramkarskie nie mają tu znaczenia: bronisz, czytając strzał.</li>
             <li>Gdy przez minutę nikt nie szuka gry, zagrasz z botem.</li>
           </ul>
         </aside>
@@ -850,6 +851,14 @@ function matchFound(duel) {
       if (location.hash === '#pojedynki-gra') render();
     }
   }, 900);
+}
+
+// Prędkość krążącego celownika: im lepsze Wykończenie (i trochę Wizja gry oraz Szybkość), tym wolniej.
+// Te same wzory co na serwerze (server/game.js: shooterSkill, aimSpeed).
+function aimSpeed() {
+  const s = ME.player.stats;
+  const skill = s.wykonczenie * 0.7 + s.wizja * 0.15 + s.szybkosc * 0.15;
+  return 1.5 / (1 + skill / 45);
 }
 
 async function penaltyGame() {
@@ -995,8 +1004,8 @@ async function penaltyGame() {
       if (d.status.finished) return finish(d);
       if (d.status.turn && !d.waiting) {
         if (d.status.turn === 'shoot') {
-          hint('<b>Twój strzał.</b> Stuknij w bramkę tam, gdzie chcesz strzelić.');
-          scene.wait('shoot', send);
+          hint('<b>Twój strzał.</b> Celownik krąży po bramce. Stuknij, aby go zatrzymać i strzelić.');
+          scene.wait('shoot', send, { sweep: aimSpeed() });
         } else {
           hint('<b>Bronisz.</b> Stuknij w bramkę tam, gdzie rzuci się Twój bramkarz.');
           scene.wait('save', send);

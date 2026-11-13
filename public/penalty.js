@@ -1176,7 +1176,7 @@
   // ---------- scena ----------
   function PenaltyScene(canvas) {
     const g = canvas.getContext('2d');
-    const state = { view: 'shoot', aim: null, busy: false, anim: null, particles: [], text: null, shake: 0, marker: null, t0: performance.now() };
+    const state = { view: 'shoot', aim: null, busy: false, anim: null, particles: [], text: null, shake: 0, marker: null, sweep: null, t0: performance.now() };
     const backdrop = { shoot: makeBackdrop('shoot'), save: makeBackdrop('save') };
     const KZ = 0.3; // bramkarz stoi 30 cm przed linią
     let onPick = null;
@@ -1238,6 +1238,14 @@
       return { x: clamp(g0.x, -0.95, 0.95), y: clamp(g0.y, 0.05, 0.95) };
     }
 
+    // Krążący celownik napastnika: punkt bramki w chwili `now` (tor Lissajous pokrywa całą bramkę).
+    function sweepPoint(now) {
+      const sw = state.sweep;
+      if (sw.frozen) return sw.frozen;
+      const t = ((now - sw.t0) / 1000) * sw.speed;
+      return { x: 0.95 * Math.sin(2 * PI * t + sw.ph), y: 0.5 + 0.45 * Math.sin(2 * PI * t * 1.53 + sw.ph * 2.1) };
+    }
+
     function resize() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth || 800;
@@ -1258,7 +1266,12 @@
       if (state.busy || !onPick) return;
       const p = toScene(e);
       state.aim = p;
-      const goal = state.view === 'shoot' ? shotTarget(p.x, p.y) : saveUnmap(p.x, p.y);
+      let goal;
+      if (state.view === 'shoot' && state.sweep) {
+        // zatrzymanie celownika: strzał leci tam, gdzie celownik był w chwili stuknięcia
+        goal = sweepPoint(performance.now());
+        state.sweep.frozen = goal;
+      } else goal = state.view === 'shoot' ? shotTarget(p.x, p.y) : saveUnmap(p.x, p.y);
       state.marker = { x: p.x, y: p.y };
       const cb = onPick;
       onPick = null;
@@ -1416,7 +1429,45 @@
         }
       }
       // celownik
-      if (!state.busy && state.aim && onPick) {
+      if (state.sweep && (onPick || state.sweep.frozen) && (!a || a.t < a.contactT)) {
+        const now2 = performance.now();
+        const sp = sweepPoint(now2);
+        // ślad celownika
+        if (!state.sweep.frozen) {
+          for (let i = 6; i >= 1; i--) {
+            const q = sweepPoint(now2 - i * 22);
+            const qp = CAM.shoot.p(q.x * GW, q.y * GH, 0);
+            g.fillStyle = `rgba(182,242,58,${0.05 * (7 - i)})`;
+            g.beginPath();
+            g.arc(qp.x, qp.y, 6, 0, PI * 2);
+            g.fill();
+          }
+        }
+        const c = CAM.shoot.p(sp.x * GW, sp.y * GH, 0);
+        const col = state.sweep.frozen ? '#ffd23f' : '#b6f23a';
+        g.save();
+        g.strokeStyle = col;
+        g.lineWidth = 3;
+        g.shadowColor = col;
+        g.shadowBlur = 14;
+        g.beginPath();
+        g.arc(c.x, c.y, 12, 0, PI * 2);
+        g.moveTo(c.x - 22, c.y);
+        g.lineTo(c.x - 6, c.y);
+        g.moveTo(c.x + 6, c.y);
+        g.lineTo(c.x + 22, c.y);
+        g.moveTo(c.x, c.y - 22);
+        g.lineTo(c.x, c.y - 6);
+        g.moveTo(c.x, c.y + 6);
+        g.lineTo(c.x, c.y + 22);
+        g.stroke();
+        g.fillStyle = col;
+        g.beginPath();
+        g.arc(c.x, c.y, 2.5, 0, PI * 2);
+        g.fill();
+        g.restore();
+      }
+      if (!state.sweep && !state.busy && state.aim && onPick) {
         const { x, y } = state.aim;
         const inGoal = inHull(x, y);
         const col = inGoal ? '#b6f23a' : '#ff9b3d';
@@ -1666,10 +1717,12 @@
     raf = requestAnimationFrame(frame);
 
     return {
-      wait(view, cb) {
+      // opts.sweep: prędkość krążącego celownika (obiegi na sekundę) w widoku strzału
+      wait(view, cb, opts = {}) {
         state.view = view;
         state.marker = null;
         state.busy = false;
+        state.sweep = view === 'shoot' && opts.sweep ? { t0: performance.now(), speed: opts.sweep, ph: Math.random() * PI * 2, frozen: null } : null;
         onPick = cb;
       },
       get view() {
@@ -1677,14 +1730,18 @@
       },
       // punkt bramki dla kliknięcia w widoku strzału (używane w testach)
       targetAt: (sx, sy) => shotTarget(sx, sy),
+      // aktualny punkt krążącego celownika (używane w testach)
+      sweepAt: () => (state.sweep ? sweepPoint(performance.now()) : null),
       // przerwanie oczekiwania na kliknięcie (koniec czasu)
       cancel() {
         onPick = null;
         state.busy = true;
+        state.sweep = null;
       },
       show(view) {
         state.view = view;
         state.marker = null;
+        if (!(state.sweep && state.sweep.frozen && view === 'shoot')) state.sweep = null;
         state.busy = true;
         onPick = null;
       },
@@ -1692,9 +1749,10 @@
         state.busy = true;
         return new Promise((resolve) => {
           const mine = kick.side === 'my';
+          const fly = lerp(0.19, 0.1, clamp((kick.power || 0) * 1.4, 0, 1)); // mocniejszy strzał = krótszy lot
           state.anim = mine
-            ? { kick, result: kick.result, start: performance.now(), dur: 3000, contactT: 0.38, hitT: 0.53, t: 0, done: resolve }
-            : { kick, result: kick.result, start: performance.now(), dur: 3200, contactT: 0.5, hitT: 0.66, t: 0, done: resolve };
+            ? { kick, result: kick.result, start: performance.now(), dur: 3000, contactT: 0.38, hitT: 0.38 + fly, t: 0, done: () => { state.sweep = null; resolve(); } }
+            : { kick, result: kick.result, start: performance.now(), dur: 3200, contactT: 0.5, hitT: 0.5 + fly, t: 0, done: resolve };
         });
       },
       destroy() {

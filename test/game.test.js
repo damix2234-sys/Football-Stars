@@ -52,6 +52,16 @@ test('karne: lepszy strzelec trafia częściej, seria kończy się poprawnie', (
   assert.equal(G.penaltyStatus({ my: Array(5).fill('goal'), op: Array(4).fill('goal') }).turn, 'save');
 });
 
+test('karne: celownik zwalnia z Wykończeniem, statystyki bramkarza nie mają wpływu', () => {
+  assert.ok(G.aimSpeed(10) > G.aimSpeed(100) && G.aimSpeed(100) > G.aimSpeed(300));
+  for (const ball of [{ x: 0.4, y: 0.5 }, { x: -0.8, y: 0.3 }, { x: 0.1, y: 0.9 }]) {
+    const dive = { x: 0, y: 0.5 };
+    assert.equal(G.resolveKick(ball, dive, 0, 50), G.resolveKick(ball, dive, 500, 50));
+  }
+  // mocniejszy strzał skraca zasięg bramkarza
+  assert.ok(G.keeperReach(0, { x: 0, y: 0.5 }, 300) < G.keeperReach(0, { x: 0, y: 0.5 }, 10));
+});
+
 test('symulacja jest deterministyczna i lepszy zawodnik zwykle wygrywa', () => {
   const weak = G.playerSide('Słaby', G.startingSkills('NAP'));
   const strongStats = Object.fromEntries(G.STAT_KEYS.map((k) => [k, 30]));

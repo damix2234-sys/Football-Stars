@@ -492,7 +492,7 @@
       first: d.first === 'home' ? 'my' : 'op',
       my: d.kicks.filter((k) => k.shooter === 'home').map((k) => k.result),
       op: d.kicks.filter((k) => k.shooter === 'away').map((k) => k.result),
-      kicks: d.kicks.map((k) => ({ side: k.shooter === 'home' ? 'my' : 'op', target: k.target, ball: k.ball, dive: k.dive, result: k.result })),
+      kicks: d.kicks.map((k) => ({ side: k.shooter === 'home' ? 'my' : 'op', target: k.target, ball: k.ball, dive: k.dive, result: k.result, power: k.power || 0 })),
       status: { me: hs.me, op: hs.op, finished: hs.finished, turn: myTurn, suddenDeath: hs.suddenDeath, result: hs.result },
       waiting: !!(myTurn && d.pending[role]),
       startsIn: Math.max(0, d.turnAt - now()),
@@ -523,7 +523,7 @@
     const skillS = G.shooterSkill(shooterStats);
     const skillK = G.keeperSkill(keeperStats);
     const ball = shot.bot ? G.ballLanding(shot, skillS, G.rng(d.seed + d.kicks.length * 104729)) : { x: shot.x, y: shot.y };
-    d.kicks.push({ shooter, target: { x: shot.x, y: shot.y }, ball, dive: { x: dive.x, y: dive.y }, result: G.resolveKick(ball, dive, skillK, skillS) });
+    d.kicks.push({ shooter, target: { x: shot.x, y: shot.y }, ball, dive: { x: dive.x, y: dive.y }, result: G.resolveKick(ball, dive, skillK, skillS), power: G.shotPower(skillS) });
     d.pending = {};
     d.turnAt = now() + G.PENALTY_ANIM_MS;
     const after = G.penaltyStatus(pkHomeView(d));

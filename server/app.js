@@ -646,7 +646,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
       first: st.first === me ? 'my' : 'op',
       my: st.kicks.filter((k) => k.shooter === me).map((k) => k.result),
       op: st.kicks.filter((k) => k.shooter === them).map((k) => k.result),
-      kicks: st.kicks.map((k) => ({ side: k.shooter === me ? 'my' : 'op', target: k.target, ball: k.ball, dive: k.dive, result: k.result })),
+      kicks: st.kicks.map((k) => ({ side: k.shooter === me ? 'my' : 'op', target: k.target, ball: k.ball, dive: k.dive, result: k.result, power: k.power || 0 })),
       status: {
         me: flip ? hs.op : hs.me,
         op: flip ? hs.me : hs.op,
@@ -693,7 +693,7 @@ export function createApp(db, { now = () => Date.now() } = {}) {
     // strzał gracza leci dokładnie w wybrany punkt; strzał bota ma rozrzut
     const ball = shot.bot ? G.ballLanding(shot, skillS, rand) : { x: shot.x, y: shot.y };
     const target = { x: shot.x, y: shot.y };
-    st.kicks.push({ shooter, target, ball, dive: { x: dive.x, y: dive.y }, result: G.resolveKick(ball, dive, skillK, skillS) });
+    st.kicks.push({ shooter, target, ball, dive: { x: dive.x, y: dive.y }, result: G.resolveKick(ball, dive, skillK, skillS), power: G.shotPower(skillS) });
     st.pending = {};
     st.turnAt = now() + G.PENALTY_ANIM_MS;
     const after = G.penaltyStatus(homeView(st));

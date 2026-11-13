@@ -380,6 +380,8 @@ export function makeBot(ovrTarget, rand) {
 // Ruch po czasie: strzał obok bramki albo bramkarz zostaje w środku.
 export const timeoutMove = (turn) => (turn === 'shoot' ? { x: 1.6, y: 0.4 } : { x: 0, y: 0.45 }); // zabezpieczenie przed nieskończoną serią
 
+// Celownik napastnika: obiegi bramki na sekundę. Na początku szybki, wolniejszy z wyższym Wykończeniem.
+export const aimSpeed = (shooter) => 1.5 / (1 + shooter / 45);
 export const shooterSkill = (s) => s.wykonczenie * 0.7 + s.wizja * 0.15 + s.szybkosc * 0.15;
 export const keeperSkill = (s) => s.refleks * 0.55 + s.chwytanie * 0.45;
 
@@ -401,8 +403,11 @@ export function ballLanding(target, shooter, rand) {
 export function shotPower(shooter) {
   return shooter / (shooter + 60);
 }
+// Zasięg rąk bramkarza w karnych jest taki sam dla wszystkich (statystyki bramkarskie nie mają tu
+// wpływu): ok. 1,5 m od wybranego punktu. Skraca go siła strzału (umiejętności strzelca) i okienko.
+export const KEEPER_REACH = 0.42;
 export function keeperReach(keeper, ball, shooter = 0) {
-  const base = 0.3 + 0.32 * (keeper / (keeper + 40));
+  const base = KEEPER_REACH;
   const power = 1.12 - 0.4 * shotPower(shooter);
   const corner = Math.abs(ball.x) > 0.75 && ball.y > 0.65 ? 0.75 : 1;
   return base * power * corner;
